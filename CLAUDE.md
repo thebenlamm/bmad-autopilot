@@ -4,9 +4,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-BMAD Autopilot is a bash-based orchestration tool that automates the BMAD (Business-driven, Methodical, Agile Development) workflow. It manages the full story lifecycle: creation → development → code review.
+BMAD Autopilot orchestrates BMAD (Business-driven, Methodical, Agile Development) workflows. It manages the full story lifecycle: creation → development → code review using multiple LLMs.
 
-## Scripts
+**Two interfaces:**
+1. **MCP Server** - Claude Code calls tools directly (recommended)
+2. **CLI Scripts** - Bash scripts for manual/automated use
+
+## MCP Server
+
+The `bmad_mcp` package exposes BMAD tools via MCP protocol.
+
+### Tools
+
+| Tool | Purpose |
+|------|---------|
+| `bmad_set_project` | Set active project (required first) |
+| `bmad_status` | Get sprint status |
+| `bmad_next` | Get next actionable stories |
+| `bmad_create_story` | Generate story from epics |
+| `bmad_develop_story` | Get implementation instructions |
+| `bmad_review_story` | Run adversarial code review |
+| `bmad_update_status` | Update story status |
+| `bmad_run_epic` | Orchestrate full epic |
+
+### Package Structure
+
+```
+bmad_mcp/
+├── server.py      # MCP server + tool definitions
+├── project.py     # Project validation
+├── sprint.py      # Sprint status YAML operations
+├── llm.py         # LLM CLI wrapper
+└── phases/
+    ├── create.py  # Story creation
+    ├── develop.py # Implementation instructions
+    └── review.py  # Code review
+```
+
+## CLI Scripts
 
 | Script | Purpose |
 |--------|---------|

@@ -46,7 +46,62 @@ pip install aider-chat
 # Install from https://claude.ai/code
 ```
 
-## Usage
+## MCP Server (Recommended)
+
+The MCP server lets Claude Code directly orchestrate BMAD workflows.
+
+### Install MCP Server
+
+```bash
+# Create virtual environment and install
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### Configure Claude Code
+
+Add to `~/.claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "bmad": {
+      "command": "/path/to/bmad-autopilot/.venv/bin/bmad-mcp"
+    }
+  }
+}
+```
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `bmad_set_project` | Set active BMAD project directory |
+| `bmad_status` | Get sprint status with story counts |
+| `bmad_next` | Get next actionable stories |
+| `bmad_create_story` | Generate story from epics |
+| `bmad_develop_story` | Get implementation instructions |
+| `bmad_review_story` | Run adversarial code review |
+| `bmad_update_status` | Update story status |
+| `bmad_run_epic` | Get orchestration plan for epic |
+
+### Example Workflow
+
+```
+You: "Run epic 0 for ~/Workspace/myproject"
+
+Claude: [Calls bmad_set_project, then bmad_run_epic]
+        "Epic 0 has 3 stories. Let me create the first one..."
+        [Calls bmad_create_story for 0-1-homepage]
+        [Calls bmad_develop_story, reads instructions, implements]
+        [Calls bmad_review_story]
+        "Review passed. Moving to next story..."
+```
+
+---
+
+## CLI Usage
 
 ### Full Pipeline (bmad-autopilot)
 
