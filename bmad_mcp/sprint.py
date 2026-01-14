@@ -1,5 +1,7 @@
 """Sprint status YAML operations."""
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -18,9 +20,25 @@ def load_sprint_status(path: Path) -> dict:
 
 
 def save_sprint_status(path: Path, data: dict):
-    """Save sprint-status.yaml."""
-    with open(path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    """Save sprint-status.yaml atomically.
+
+    Uses temp file + rename pattern to prevent race conditions when
+    multiple processes write to the same file concurrently.
+    """
+    dir_path = path.parent
+
+    # Write to temp file in same directory (required for atomic rename)
+    fd, temp_path = tempfile.mkstemp(suffix='.tmp', dir=dir_path)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        # Atomic rename (on POSIX systems)
+        os.rename(temp_path, path)
+    except Exception:
+        # Clean up temp file on failure
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
 
 
 def get_development_status(path: Path) -> dict[str, str]:

@@ -23,6 +23,23 @@ The `bmad_mcp` package exposes BMAD tools via MCP protocol. **This is the recomm
 4. Follow the plan: create → develop → review each story
 ```
 
+### Response Format
+
+**All tools return a `next_step` field** telling you exactly what to do next:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "next_step": {
+    "action": "bmad_run_epic or bmad_status",
+    "description": "Get epic plan or check sprint status"
+  }
+}
+```
+
+**Always follow the `next_step` guidance** - it ensures you don't skip workflow steps.
+
 ### Tool Reference
 
 #### `bmad_set_project` (REQUIRED FIRST)
@@ -40,6 +57,10 @@ The `bmad_mcp` package exposes BMAD tools via MCP protocol. **This is the recomm
     "sprint_status": "/Users/ben/Workspace/myproject/docs/sprint-artifacts/sprint-status.yaml",
     "epics_file": "/Users/ben/Workspace/myproject/docs/epics.md",
     "status_summary": {"backlog": 5, "ready-for-dev": 2, "done": 3}
+  },
+  "next_step": {
+    "action": "bmad_run_epic or bmad_status",
+    "description": "Get epic plan or check sprint status"
   }
 }
 ```
@@ -130,7 +151,62 @@ Generate a story file from epics using Claude. Updates status to `ready-for-dev`
 2. Implement each task in the target project
 3. Check off tasks in the story file as you complete them
 4. Run tests to verify acceptance criteria
-5. Call `bmad_update_status` with status `review` when done
+5. Call `bmad_verify_implementation` to check readiness
+6. If verification passes, call `bmad_review_story`
+
+#### `bmad_verify_implementation` (NEW - Call Before Review)
+**Verifies implementation is ready for review.** Checks git changes, task completion, and tests.
+
+```json
+// Input
+{"story_key": "0-2-navigation"}
+
+// Output (ready for review)
+{
+  "success": true,
+  "data": {
+    "story_key": "0-2-navigation",
+    "ready_for_review": true,
+    "has_changes": true,
+    "files_changed": 5,
+    "tasks_completed": 4,
+    "tasks_total": 4,
+    "tests_passed": true,
+    "checks": {
+      "git_changes": {"passed": true, "message": "5 files changed"},
+      "task_completion": {"passed": true, "message": "4/4 tasks completed"},
+      "tests": {"passed": true, "message": "All tests passed"}
+    }
+  },
+  "next_step": {
+    "action": "bmad_review_story",
+    "args": {"story_key": "0-2-navigation"},
+    "description": "Run code review"
+  }
+}
+
+// Output (NOT ready)
+{
+  "success": true,
+  "data": {
+    "ready_for_review": false,
+    "checks": {
+      "git_changes": {"passed": true, "message": "3 files changed"},
+      "task_completion": {"passed": false, "message": "2/4 tasks completed - finish tasks before review"},
+      "tests": {"passed": false, "message": "Tests failed - fix before review"}
+    }
+  },
+  "next_step": {
+    "action": "continue implementation",
+    "description": "Complete remaining tasks and fix failing tests"
+  }
+}
+```
+
+**This tool prevents premature reviews** by checking:
+- Git has uncommitted or committed changes
+- All tasks in the story file are checked off
+- Tests pass (if npm test or pytest is available)
 
 #### `bmad_review_story`
 Run adversarial code review using Claude Opus. Compares git diff against story requirements.
@@ -139,7 +215,7 @@ Run adversarial code review using Claude Opus. Compares git diff against story r
 // Input
 {"story_key": "0-2-navigation"}
 
-// Output
+// Output (no critical issues)
 {
   "success": true,
   "data": {
@@ -148,12 +224,57 @@ Run adversarial code review using Claude Opus. Compares git diff against story r
     "has_critical_issues": false,
     "recommendation": "done",
     "review_file": "/path/to/reviews/0-2-navigation-review.md",
-    "new_status": "done"
+    "new_status": "done",
+    "actionable_fixes": [
+      {
+        "severity": "MEDIUM",
+        "file": "src/components/Nav.tsx",
+        "line": "42",
+        "issue": "Missing null check for user prop",
+        "fix": "Add optional chaining: user?.name instead of user.name"
+      }
+    ]
+  },
+  "next_step": {
+    "action": "bmad_next or bmad_run_epic",
+    "description": "Story complete! Get next story to work on"
+  }
+}
+
+// Output (has critical issues)
+{
+  "success": true,
+  "data": {
+    "story_key": "0-2-navigation",
+    "review": "...",
+    "has_critical_issues": true,
+    "recommendation": "in-progress",
+    "new_status": "in-progress",
+    "actionable_fixes": [
+      {
+        "severity": "CRITICAL",
+        "file": "src/api/auth.ts",
+        "line": "15",
+        "issue": "SQL injection vulnerability",
+        "fix": "Use parameterized query: db.query('SELECT * FROM users WHERE id = ?', [userId])"
+      }
+    ]
+  },
+  "next_step": {
+    "action": "fix issues then bmad_verify_implementation",
+    "description": "Fix CRITICAL issues listed in actionable_fixes, then verify again"
   }
 }
 ```
 
-**If `has_critical_issues` is true:** Status is set to `in-progress`, you should fix the issues and re-review.
+**The `actionable_fixes` array** provides structured, machine-readable issues:
+- `severity`: CRITICAL, HIGH, MEDIUM, or LOW
+- `file`: File path where the issue is located
+- `line`: Line number (if identified)
+- `issue`: Description of the problem
+- `fix`: Specific fix recommendation
+
+**If `has_critical_issues` is true:** Status is set to `in-progress`. Fix the issues in `actionable_fixes`, then call `bmad_verify_implementation` and re-review.
 
 #### `bmad_update_status`
 Manually update a story's status.
@@ -195,6 +316,8 @@ Get orchestration plan for a full epic. Shows all stories and recommended action
 **Claude should:**
 ```
 1. bmad_set_project({project_path: "~/Workspace/myproject"})
+   → Follow next_step guidance
+
 2. bmad_run_epic({epic_number: 0})
    → Returns plan with stories to create/develop/review
 
@@ -203,22 +326,37 @@ Get orchestration plan for a full epic. Shows all stories and recommended action
    If action == "create":
      bmad_create_story({story_key: "0-1-homepage"})
      → Story file created, status = ready-for-dev
+     → Follow next_step to develop
 
    If action == "develop" or "continue":
      bmad_develop_story({story_key: "0-1-homepage"})
      → Read story_content and tasks
      → IMPLEMENT the code in the target project
-     → Check off tasks as you go
+     → Check off tasks in story file as you go
      → Run tests
-     → bmad_update_status({story_key: "0-1-homepage", status: "review"})
 
-   If action == "review":
+     bmad_verify_implementation({story_key: "0-1-homepage"})
+     → If ready_for_review: proceed to review
+     → If NOT ready: complete remaining tasks/fix tests first
+
+   If action == "review" (or after verify passes):
      bmad_review_story({story_key: "0-1-homepage"})
-     → If has_critical_issues: fix and re-review
+     → If has_critical_issues:
+        - Fix issues from actionable_fixes array
+        - Call bmad_verify_implementation again
+        - Re-review
      → If no critical issues: status automatically set to done
 
 4. Repeat until all stories are done
 ```
+
+### Key Workflow Rules
+
+1. **Always call `bmad_set_project` first** - other tools will fail without it
+2. **Follow `next_step` guidance** - every response tells you what to do next
+3. **Call `bmad_verify_implementation` before review** - prevents premature reviews
+4. **Use `actionable_fixes` to fix issues** - structured, specific fixes
+5. **Re-verify after fixing** - don't skip the verification loop
 
 ### Error Handling
 

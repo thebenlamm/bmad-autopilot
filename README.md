@@ -75,6 +75,7 @@ claude mcp list
 | `bmad_next` | Get next actionable stories |
 | `bmad_create_story` | Generate story from epics |
 | `bmad_develop_story` | Get implementation instructions |
+| `bmad_verify_implementation` | Check if implementation is ready for review |
 | `bmad_review_story` | Run adversarial code review |
 | `bmad_update_status` | Update story status |
 | `bmad_run_epic` | Get orchestration plan for epic |

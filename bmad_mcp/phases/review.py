@@ -1,10 +1,24 @@
 """Code review phase - adversarial review using LLM."""
 
+import re
 import subprocess
 from pathlib import Path
 
 from ..llm import call_llm, get_model, DEFAULT_REVIEW_MODEL
 from ..project import ProjectPaths, get_default_branch
+
+
+def validate_branch_name(branch: str) -> bool:
+    """Validate branch name contains only safe characters.
+
+    Prevents command injection via malicious branch names that could
+    be interpreted as git flags (e.g., --version, -v).
+    """
+    if not branch:
+        return False
+    # Only allow alphanumeric, dots, underscores, hyphens, and forward slashes
+    # Must not start with a hyphen (could be interpreted as a flag)
+    return bool(re.match(r'^[a-zA-Z0-9._/][a-zA-Z0-9._/-]*$', branch))
 
 
 SYSTEM_PROMPT = """You are an ADVERSARIAL Senior Developer performing code review.
@@ -39,6 +53,10 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
     """
     if base_branch is None:
         base_branch = get_default_branch(project_root)
+
+    # Validate branch name to prevent command injection
+    if not validate_branch_name(base_branch):
+        return f"No diff available (invalid branch name: {base_branch})"
 
     try:
         # Get diff stats
