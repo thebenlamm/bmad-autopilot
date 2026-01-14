@@ -54,23 +54,16 @@ The MCP server lets Claude Code directly orchestrate BMAD workflows.
 
 ```bash
 # Create virtual environment and install
+cd /path/to/bmad-autopilot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
 
-### Configure Claude Code
+# Add to Claude Code
+claude mcp add bmad -- /path/to/bmad-autopilot/.venv/bin/bmad-mcp
 
-Add to `~/.claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "bmad": {
-      "command": "/path/to/bmad-autopilot/.venv/bin/bmad-mcp"
-    }
-  }
-}
+# Verify it's connected
+claude mcp list
 ```
 
 ### MCP Tools
