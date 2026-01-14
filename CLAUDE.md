@@ -225,7 +225,7 @@ Run adversarial code review using Claude Opus. Compares git diff against story r
     "recommendation": "done",
     "review_file": "/path/to/reviews/0-2-navigation-review.md",
     "new_status": "done",
-    "actionable_fixes": [
+    "structured_issues": [
       {
         "severity": "MEDIUM",
         "file": "src/components/Nav.tsx",
@@ -250,7 +250,7 @@ Run adversarial code review using Claude Opus. Compares git diff against story r
     "has_critical_issues": true,
     "recommendation": "in-progress",
     "new_status": "in-progress",
-    "actionable_fixes": [
+    "structured_issues": [
       {
         "severity": "CRITICAL",
         "file": "src/api/auth.ts",
@@ -262,19 +262,19 @@ Run adversarial code review using Claude Opus. Compares git diff against story r
   },
   "next_step": {
     "action": "fix issues then bmad_verify_implementation",
-    "description": "Fix CRITICAL issues listed in actionable_fixes, then verify again"
+    "description": "Fix CRITICAL issues listed in structured_issues, then verify again"
   }
 }
 ```
 
-**The `actionable_fixes` array** provides structured, machine-readable issues:
+**The `structured_issues` array** provides structured, machine-readable issues:
 - `severity`: CRITICAL, HIGH, MEDIUM, or LOW
 - `file`: File path where the issue is located
 - `line`: Line number (if identified)
 - `issue`: Description of the problem
 - `fix`: Specific fix recommendation
 
-**If `has_critical_issues` is true:** Status is set to `in-progress`. Fix the issues in `actionable_fixes`, then call `bmad_verify_implementation` and re-review.
+**If `has_critical_issues` is true:** Status is set to `in-progress`. Fix the issues in `structured_issues`, then call `bmad_verify_implementation` and re-review.
 
 #### `bmad_update_status`
 Manually update a story's status.
@@ -342,7 +342,7 @@ Get orchestration plan for a full epic. Shows all stories and recommended action
    If action == "review" (or after verify passes):
      bmad_review_story({story_key: "0-1-homepage"})
      → If has_critical_issues:
-        - Fix issues from actionable_fixes array
+        - Fix issues from structured_issues array
         - Call bmad_verify_implementation again
         - Re-review
      → If no critical issues: status automatically set to done
@@ -355,7 +355,7 @@ Get orchestration plan for a full epic. Shows all stories and recommended action
 1. **Always call `bmad_set_project` first** - other tools will fail without it
 2. **Follow `next_step` guidance** - every response tells you what to do next
 3. **Call `bmad_verify_implementation` before review** - prevents premature reviews
-4. **Use `actionable_fixes` to fix issues** - structured, specific fixes
+4. **Use `structured_issues` to fix issues** - structured, specific fixes
 5. **Re-verify after fixing** - don't skip the verification loop
 
 ### Error Handling
@@ -365,6 +365,15 @@ All tools return `{success: false, error: "message"}` on failure:
 - "Invalid story key format" - Use format `N-N-slug` (e.g., `0-1-homepage`)
 - "Story file not found" - Create the story first with `bmad_create_story`
 - "Cannot find sprint-status.yaml" - Project structure is wrong
+
+### Known Limitations
+
+**Single-user design:** The MCP server uses global state to track the active project. This means:
+- Only one project can be active at a time per server instance
+- If the MCP server is shared across multiple Claude conversations, they will share the same project context
+- Calling `bmad_set_project` in one conversation affects all conversations using that server instance
+
+This is intentional for simplicity in single-user local development. For multi-user scenarios, run separate MCP server instances.
 
 ### Package Structure
 

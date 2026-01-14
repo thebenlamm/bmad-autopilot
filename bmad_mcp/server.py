@@ -651,37 +651,80 @@ async def handle_review_story(story_key: str) -> dict:
 
 
 def _parse_review_issues(review_content: str) -> list[dict]:
-    """Parse structured issues from review markdown."""
+    """Parse structured issues from review markdown.
+
+    Handles multiple LLM output formats:
+    - **CRITICAL**: description
+    - CRITICAL: description
+    - ### CRITICAL
+    - - CRITICAL - description
+    - [CRITICAL] description
+    """
     issues = []
 
-    # Pattern: Look for severity markers and extract context
-    severity_pattern = r'\*\*(CRITICAL|HIGH|MEDIUM|LOW)\*\*[:\s]*(.+?)(?=\*\*(?:CRITICAL|HIGH|MEDIUM|LOW)\*\*|$)'
+    # Multiple patterns to match different LLM output formats
+    patterns = [
+        # **CRITICAL**: description or **CRITICAL** description
+        r'\*\*(CRITICAL|HIGH|MEDIUM|LOW)\*\*[:\s]*(.+?)(?=\*\*(?:CRITICAL|HIGH|MEDIUM|LOW)\*\*|\n##|\n\*\*[A-Z]+\*\*|$)',
+        # CRITICAL: description (plain text)
+        r'(?:^|\n)(CRITICAL|HIGH|MEDIUM|LOW)[:\s]+(.+?)(?=\n(?:CRITICAL|HIGH|MEDIUM|LOW)[:\s]|\n##|$)',
+        # ### CRITICAL or ## CRITICAL (header style)
+        r'#{2,3}\s*(CRITICAL|HIGH|MEDIUM|LOW)[:\s]*\n(.+?)(?=\n#{2,3}|$)',
+        # [CRITICAL] description (bracket style)
+        r'\[(CRITICAL|HIGH|MEDIUM|LOW)\][:\s]*(.+?)(?=\[(?:CRITICAL|HIGH|MEDIUM|LOW)\]|\n##|$)',
+        # - CRITICAL - or * CRITICAL: (list style)
+        r'[-*]\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*[-:]\s*(.+?)(?=\n[-*]\s*(?:CRITICAL|HIGH|MEDIUM|LOW)|$)',
+        # Numbered: 1. **CRITICAL**: or 1. CRITICAL:
+        r'\d+\.\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW)\*{0,2}[:\s]+(.+?)(?=\n\d+\.\s*\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)|$)',
+    ]
 
-    for match in re.finditer(severity_pattern, review_content, re.DOTALL | re.IGNORECASE):
-        severity = match.group(1).upper()
-        content = match.group(2).strip()
+    seen_issues = set()  # Deduplicate
 
-        # Try to extract file reference
-        file_match = re.search(r'[`\']?([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)[`\']?(?::(\d+))?', content)
-        file_path = file_match.group(1) if file_match else None
-        line_num = file_match.group(2) if file_match and file_match.group(2) else None
+    for pattern in patterns:
+        for match in re.finditer(pattern, review_content, re.DOTALL | re.IGNORECASE):
+            severity = match.group(1).upper()
+            content = match.group(2).strip()
 
-        # Get first line as problem summary
-        lines = content.split('\n')
-        problem = lines[0].strip() if lines else content[:100]
+            # Skip if we've already captured this content
+            content_key = content[:50]
+            if content_key in seen_issues:
+                continue
+            seen_issues.add(content_key)
 
-        # Look for suggested fix
-        fix_match = re.search(r'(?:fix|solution|suggest|change)[:\s]*(.+?)(?:\n|$)', content, re.IGNORECASE)
-        fix = fix_match.group(1).strip() if fix_match else None
+            # Try to extract file reference with various formats
+            # Matches: `file.py:42`, 'file.py', file.py:42, (file.py, line 42)
+            file_patterns = [
+                r'[`\'"]([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)[`\'"]?[:\s]*(?:line\s*)?(\d+)?',
+                r'\(([a-zA-Z0-9_/.-]+\.[a-zA-Z]+),?\s*(?:line\s*)?(\d+)?\)',
+                r'(?:in|at|file)\s+([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)(?:[:\s]+(?:line\s*)?(\d+))?',
+            ]
 
-        issues.append({
-            "severity": severity,
-            "problem": problem,
-            "file": file_path,
-            "line": int(line_num) if line_num else None,
-            "suggested_fix": fix,
-            "full_context": content[:500],
-        })
+            file_path = None
+            line_num = None
+            for fp in file_patterns:
+                file_match = re.search(fp, content, re.IGNORECASE)
+                if file_match:
+                    file_path = file_match.group(1)
+                    line_num = file_match.group(2) if len(file_match.groups()) > 1 else None
+                    break
+
+            # Get first line as problem summary
+            lines = [l.strip() for l in content.split('\n') if l.strip()]
+            problem = lines[0] if lines else content[:100]
+
+            # Look for suggested fix with various keywords
+            fix_keywords = r'(?:fix|solution|suggest|change|should|instead|replace|use)[:\s]*(.+?)(?:\n|$)'
+            fix_match = re.search(fix_keywords, content, re.IGNORECASE)
+            fix = fix_match.group(1).strip() if fix_match else None
+
+            issues.append({
+                "severity": severity,
+                "problem": problem,
+                "file": file_path,
+                "line": int(line_num) if line_num else None,
+                "suggested_fix": fix,
+                "full_context": content[:500],
+            })
 
     # If no structured issues found, create a generic one
     if not issues and review_content:
