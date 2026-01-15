@@ -17,9 +17,10 @@ else
 fi
 
 # Configuration
-CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-5-20250514}"
-AIDER_MODEL="${AIDER_MODEL:-claude-sonnet-4-5-20250514}"
-REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-4-20250514}"
+# Model names must match llm CLI format: anthropic/model-name
+CLAUDE_MODEL="${CLAUDE_MODEL:-anthropic/claude-sonnet-4-5}"
+AIDER_MODEL="${AIDER_MODEL:-anthropic/claude-sonnet-4-5}"
+REVIEW_MODEL="${REVIEW_MODEL:-anthropic/claude-opus-4-0}"
 LLM_TIMEOUT="${LLM_TIMEOUT:-300}"
 
 # Project paths
@@ -173,8 +174,21 @@ do_develop() {
         exit 1
     fi
 
+    # Check if running in non-interactive mode
+    local is_interactive=true
+    if [[ ! -t 0 ]]; then
+        is_interactive=false
+    fi
+
     if command -v aider &> /dev/null; then
         echo "Using Aider (model: $AIDER_MODEL)..."
+
+        if ! $is_interactive; then
+            echo -e "${RED}ERROR: Aider cannot run in non-interactive mode${NC}"
+            echo -e "${YELLOW}Use bmad-autopilot.sh --yolo for unattended mode${NC}"
+            exit 1
+        fi
+
         cd "$PROJECT_ROOT"
         aider --model "$AIDER_MODEL" \
               --message "Implement the story in $story_file. Check off tasks as you complete them." \
@@ -316,9 +330,9 @@ show_help() {
     echo "  --help, -h          Show this help"
     echo ""
     echo "Environment variables:"
-    echo "  CLAUDE_MODEL   Model for story creation (default: claude-sonnet-4-5-20250514)"
-    echo "  AIDER_MODEL    Model for development (default: claude-sonnet-4-5-20250514)"
-    echo "  REVIEW_MODEL   Model for code review (default: claude-opus-4-20250514)"
+    echo "  CLAUDE_MODEL   Model for story creation (default: anthropic/claude-sonnet-4-5)"
+    echo "  AIDER_MODEL    Model for development (default: anthropic/claude-sonnet-4-5)"
+    echo "  REVIEW_MODEL   Model for code review (default: anthropic/claude-opus-4-0)"
     echo "  LLM_TIMEOUT    Timeout in seconds (default: 300)"
     echo ""
     echo "Examples:"

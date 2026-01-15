@@ -31,9 +31,10 @@ else
 fi
 
 # Configuration - customize via environment variables
-CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-5-20250514}"
-AIDER_MODEL="${AIDER_MODEL:-claude-sonnet-4-5-20250514}"
-REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-4-20250514}"
+# Model names must match llm CLI format: anthropic/model-name
+CLAUDE_MODEL="${CLAUDE_MODEL:-anthropic/claude-sonnet-4-5}"
+AIDER_MODEL="${AIDER_MODEL:-anthropic/claude-sonnet-4-5}"
+REVIEW_MODEL="${REVIEW_MODEL:-anthropic/claude-opus-4-0}"
 MAX_CONSECUTIVE_FAILURES=3
 LLM_TIMEOUT="${LLM_TIMEOUT:-300}"
 YOLO_MODE=false
@@ -123,6 +124,29 @@ validate_story_key() {
 # Get the default branch name (main, master, etc.)
 get_default_branch() {
     git -C "$PROJECT_ROOT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main"
+}
+
+# Count git changes (both uncommitted AND committed vs base branch)
+# This prevents the race condition where committed changes are missed
+count_git_changes() {
+    local base_branch
+    base_branch=$(get_default_branch)
+
+    # Count uncommitted changes (staged + unstaged)
+    local uncommitted
+    uncommitted=$(cd "$PROJECT_ROOT" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+
+    # Count committed changes vs base branch (files changed in commits not yet merged)
+    local committed
+    committed=$(cd "$PROJECT_ROOT" && git diff "$base_branch" --name-only 2>/dev/null | wc -l | tr -d ' ')
+
+    local total=$((uncommitted + committed))
+
+    # Return total and set global vars for detailed logging
+    UNCOMMITTED_CHANGES="$uncommitted"
+    COMMITTED_CHANGES="$committed"
+
+    echo "$total"
 }
 
 # Get next story to work on based on status
@@ -291,33 +315,94 @@ develop_story() {
     if command -v aider &> /dev/null; then
         log "Using Aider for development..."
 
-        local dev_prompt="Implement the story defined in $story_file
-
-Read the story file carefully and implement ALL tasks and subtasks.
-After each task, check it off in the story file.
+        local dev_prompt="Implement ALL tasks and subtasks in the story file.
+Check off each task as you complete it.
 Run tests to verify acceptance criteria.
-When complete, update the story status to 'review'."
+When complete, the story status will be updated to 'review'."
 
         cd "$PROJECT_ROOT"
+
+        # Snapshot git state BEFORE aider runs (to detect only NEW changes)
+        local git_before
+        git_before=$(mktemp)
+        git status --porcelain 2>/dev/null | sort > "$git_before"
+
+        # Record HEAD SHA before (to detect new commits made by aider)
+        local head_before
+        head_before=$(git rev-parse HEAD 2>/dev/null || echo "")
+
+        # Check if running in non-interactive mode (stdin is not a terminal)
+        local is_interactive=true
+        if [[ ! -t 0 ]]; then
+            is_interactive=false
+        fi
 
         if $YOLO_MODE; then
             log "${RED}⚠ YOLO MODE: Auto-accepting all changes without review${NC}"
             aider --model "$AIDER_MODEL" \
+                  --read "$story_file" \
                   --message "$dev_prompt" \
                   --yes-always \
                   --no-stream \
+                  --auto-commits \
                   --no-show-model-warnings \
                   2>&1 | tee -a "$LOGFILE"
+        elif ! $is_interactive; then
+            # Non-interactive mode without --yolo: FAIL to prevent silent no-op
+            log "${RED}ERROR: Aider cannot run in non-interactive mode without --yolo flag${NC}"
+            log "${RED}The terminal is not interactive (stdin is not a tty)${NC}"
+            log "${YELLOW}Solutions:${NC}"
+            log "  1. Run with --yolo flag to auto-accept all changes"
+            log "  2. Run interactively in a terminal"
+            log ""
+            log "${RED}Aborting development phase to prevent silent failure${NC}"
+            rm -f "$git_before"
+            return 1
         else
             log "${YELLOW}NOTE: Aider requires interactive terminal for confirmations${NC}"
             log "${YELLOW}Use --yolo flag for fully unattended mode (accepts all changes)${NC}"
             aider --model "$AIDER_MODEL" \
+                  --read "$story_file" \
                   --message "$dev_prompt" \
                   --no-auto-commits \
                   --no-show-model-warnings \
                   2>&1 | tee -a "$LOGFILE"
         fi
 
+        # Snapshot git status AFTER aider runs
+        local git_after
+        git_after=$(mktemp)
+        git status --porcelain 2>/dev/null | sort > "$git_after"
+
+        # Count NEW uncommitted changes (files in after but not in before)
+        local new_uncommitted
+        new_uncommitted=$(comm -13 "$git_before" "$git_after" | wc -l | tr -d ' ')
+
+        # Count NEW commits by comparing HEAD SHA before/after
+        local head_after
+        head_after=$(git rev-parse HEAD 2>/dev/null || echo "")
+        local new_commits=0
+        if [[ -n "$head_before" ]] && [[ -n "$head_after" ]] && [[ "$head_before" != "$head_after" ]]; then
+            new_commits=$(git rev-list --count "$head_before".."$head_after" 2>/dev/null || echo 0)
+        fi
+
+        rm -f "$git_before" "$git_after"
+
+        local total_changes=$((new_uncommitted + new_commits))
+
+        if [[ "$total_changes" -eq 0 ]]; then
+            log "${RED}ERROR: No NEW code changes detected after development phase${NC}"
+            log "${RED}Aider may have failed silently or not implemented anything${NC}"
+            log "${YELLOW}Keeping story in current status (not marking as review)${NC}"
+            log ""
+            log "To debug:"
+            log "  1. Check aider output above for errors"
+            log "  2. Run 'git status' and 'git log' in the project directory"
+            log "  3. Try running development phase interactively"
+            return 1
+        fi
+
+        log "${GREEN}✓ Detected $total_changes new change(s) ($new_uncommitted uncommitted, $new_commits commits)${NC}"
         update_status "$story_key" "review"
     elif command -v claude &> /dev/null; then
         log "Using Claude Code for development..."
@@ -340,6 +425,19 @@ EOF
         cd "$PROJECT_ROOT"
         claude --print "$(<"$instruction_file")"
 
+        # Verify actual changes were made
+        # Check both uncommitted AND committed changes to handle race condition
+        local changes_count
+        changes_count=$(count_git_changes)
+
+        if [[ "$changes_count" -eq 0 ]]; then
+            log "${RED}ERROR: No code changes detected after development phase${NC}"
+            log "${YELLOW}Keeping story in current status (not marking as review)${NC}"
+            return 1
+        fi
+
+        log "${GREEN}✓ Detected $changes_count file(s) changed ($UNCOMMITTED_CHANGES uncommitted, $COMMITTED_CHANGES committed)${NC}"
+
         local current_status=$(yq -r ".development_status.\"$story_key\"" "$SPRINT_STATUS")
         if [[ "$current_status" != "review" ]]; then
             log "${YELLOW}Manual update: Setting $story_key to 'review'${NC}"
@@ -354,6 +452,19 @@ EOF
 
         echo ""
         read -p "Press Enter when development is complete, or Ctrl+C to abort..."
+
+        # Verify actual changes were made
+        # Check both uncommitted AND committed changes to handle race condition
+        local changes_count
+        changes_count=$(count_git_changes)
+
+        if [[ "$changes_count" -eq 0 ]]; then
+            log "${RED}ERROR: No code changes detected${NC}"
+            log "${YELLOW}Please make changes before continuing${NC}"
+            return 1
+        fi
+
+        log "${GREEN}✓ Detected $changes_count file(s) changed ($UNCOMMITTED_CHANGES uncommitted, $COMMITTED_CHANGES committed)${NC}"
         update_status "$story_key" "review"
     fi
 
@@ -642,9 +753,9 @@ main() {
                 echo "  --help, -h          Show this help"
                 echo ""
                 echo "Environment variables:"
-                echo "  CLAUDE_MODEL        Model for story creation (default: claude-sonnet-4-5-20250514)"
-                echo "  AIDER_MODEL         Model for development (default: claude-sonnet-4-5-20250514)"
-                echo "  REVIEW_MODEL        Model for code review (default: claude-opus-4-20250514)"
+                echo "  CLAUDE_MODEL        Model for story creation (default: anthropic/claude-sonnet-4-5)"
+                echo "  AIDER_MODEL         Model for development (default: anthropic/claude-sonnet-4-5)"
+                echo "  REVIEW_MODEL        Model for code review (default: anthropic/claude-opus-4-0)"
                 echo "  LLM_TIMEOUT         Timeout for LLM calls in seconds (default: 300)"
                 echo ""
                 echo "Expected project structure:"

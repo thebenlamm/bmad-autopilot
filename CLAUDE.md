@@ -483,9 +483,9 @@ Also: `blocked` (after 3 consecutive API failures)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CLAUDE_MODEL` | `claude-sonnet-4-5-20250514` | Story creation |
-| `AIDER_MODEL` | `claude-sonnet-4-5-20250514` | Development phase |
-| `REVIEW_MODEL` | `claude-opus-4-20250514` | Code review |
+| `CLAUDE_MODEL` | `anthropic/claude-sonnet-4-5` | Story creation |
+| `AIDER_MODEL` | `anthropic/claude-sonnet-4-5` | Development phase |
+| `REVIEW_MODEL` | `anthropic/claude-opus-4-0` | Code review |
 | `LLM_TIMEOUT` | `300` | Seconds before LLM call timeout |
 
 ## Key Implementation Details

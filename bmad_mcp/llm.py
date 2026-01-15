@@ -5,9 +5,9 @@ import subprocess
 from pathlib import Path
 
 
-# Default models
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250514"
-DEFAULT_REVIEW_MODEL = "claude-opus-4-20250514"
+# Default models - must match llm CLI format: anthropic/model-name
+DEFAULT_CLAUDE_MODEL = "anthropic/claude-sonnet-4-5"
+DEFAULT_REVIEW_MODEL = "anthropic/claude-opus-4-0"
 DEFAULT_TIMEOUT = 300
 
 

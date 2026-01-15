@@ -181,9 +181,9 @@ development_status:
 Set environment variables to customize models:
 
 ```bash
-export CLAUDE_MODEL="claude-sonnet-4-5-20250514"   # Story creation
-export AIDER_MODEL="claude-sonnet-4-5-20250514"   # Development
-export REVIEW_MODEL="claude-opus-4-20250514"       # Code review
+export CLAUDE_MODEL="anthropic/claude-sonnet-4-5"   # Story creation
+export AIDER_MODEL="anthropic/claude-sonnet-4-5"   # Development
+export REVIEW_MODEL="anthropic/claude-opus-4-0"    # Code review
 export LLM_TIMEOUT=300                             # Seconds per LLM call
 ```
 
