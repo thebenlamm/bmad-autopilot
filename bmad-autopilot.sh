@@ -551,38 +551,33 @@ review_story() {
     system_file=$(mktemp)
     temp_file=$(mktemp)
 
-    {
-        echo "=== STORY REQUIREMENTS ==="
-        [[ -f "$story_file" ]] && cat "$story_file"
-        echo ""
-        echo "=== CODE CHANGES (git diff of implementation files) ==="
-        echo "$diff_content"
-    } > "$context_file"
+    # Context is ONLY the git diff - no story content
+    # Including story content causes LLM to review spec instead of code
+    echo "$diff_content" > "$context_file"
 
     cat > "$system_file" << 'SYSTEM_EOF'
 You are an ADVERSARIAL Senior Developer performing code review.
 
-CRITICAL: You are reviewing the CODE CHANGES section (git diff), NOT the story requirements.
-The story requirements are provided only for context about what SHOULD have been implemented.
+You are reviewing ONLY the git diff below. Focus on the actual code changes.
 
-Your job is to find 3-10 specific issues in the ACTUAL CODE that was written (shown in the diff).
+Your job is to find 3-10 specific issues in the code that was written.
 You MUST find issues - 'looks good' is NOT acceptable.
 
-Review the CODE CHANGES for:
+Review for:
 1. Code quality and patterns
 2. Test coverage gaps
 3. Security issues (injection, XSS, auth bypasses)
 4. Performance concerns
-5. Whether the implementation satisfies acceptance criteria
+5. Error handling and edge cases
 
 For each issue found:
 - Describe the problem specifically
-- Reference the ACTUAL file and line FROM THE DIFF
+- Reference the file and line number from the diff
 - Suggest the fix
 - Rate severity: CRITICAL, HIGH, MEDIUM, LOW
 
-IMPORTANT: Only reference files that appear in the CODE CHANGES diff.
-Do NOT critique the story markdown or reference proposed files that weren't implemented.
+IMPORTANT: Only reference files and lines that appear in the diff.
+Do NOT invent issues about code that isn't shown.
 
 Output a structured review report.
 SYSTEM_EOF

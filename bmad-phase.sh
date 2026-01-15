@@ -226,40 +226,38 @@ do_review() {
         diff_content="No diff available"
     }
 
-    local story_file="$STORIES_DIR/${story_key}.md"
-    local story_content=""
-    [[ -f "$story_file" ]] && story_content=$(cat "$story_file")
-
     local context_file system_file prompt_file
     context_file=$(mktemp)
     system_file=$(mktemp)
     prompt_file=$(mktemp)
 
-    {
-        echo "=== STORY REQUIREMENTS ==="
-        echo "$story_content"
-        echo ""
-        echo "=== CODE CHANGES ==="
-        echo "$diff_content"
-    } > "$context_file"
+    # Context is ONLY the git diff - no story content
+    # Including story content causes LLM to review spec instead of code
+    echo "$diff_content" > "$context_file"
 
     cat > "$system_file" << 'SYSTEM_EOF'
 You are an ADVERSARIAL Senior Developer performing code review.
 
-Your job is to find 3-10 specific issues in the code changes. You MUST find issues - 'looks good' is NOT acceptable.
+You are reviewing ONLY the git diff below. Focus on the actual code changes.
+
+Your job is to find 3-10 specific issues in the code that was written.
+You MUST find issues - 'looks good' is NOT acceptable.
 
 Review for:
 1. Code quality and patterns
 2. Test coverage gaps
-3. Security issues
+3. Security issues (injection, XSS, auth bypasses)
 4. Performance concerns
-5. Acceptance criteria satisfaction
+5. Error handling and edge cases
 
 For each issue found:
 - Describe the problem specifically
-- Reference the file and line
+- Reference the file and line number from the diff
 - Suggest the fix
 - Rate severity: CRITICAL, HIGH, MEDIUM, LOW
+
+IMPORTANT: Only reference files and lines that appear in the diff.
+Do NOT invent issues about code that isn't shown.
 
 Output a structured review report.
 SYSTEM_EOF
