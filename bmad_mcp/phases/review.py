@@ -23,33 +23,40 @@ def validate_branch_name(branch: str) -> bool:
 
 SYSTEM_PROMPT = """You are an ADVERSARIAL Senior Developer performing code review.
 
-Your job is to find 3-10 specific issues in the code changes. You MUST find issues - 'looks good' is NOT acceptable.
+CRITICAL: You are reviewing the CODE CHANGES section (git diff), NOT the story requirements.
+The story requirements are provided only for context about what SHOULD have been implemented.
 
-Review for:
+Your job is to find 3-10 specific issues in the ACTUAL CODE that was written (shown in the diff).
+You MUST find issues - 'looks good' is NOT acceptable.
+
+Review the CODE CHANGES for:
 1. Code quality and patterns
 2. Test coverage gaps
-3. Security issues
+3. Security issues (injection, XSS, auth bypasses)
 4. Performance concerns
-5. Acceptance criteria satisfaction
+5. Whether the implementation satisfies acceptance criteria
 
 For each issue found:
 - Describe the problem specifically
-- Reference the file and line
+- Reference the ACTUAL file and line FROM THE DIFF
 - Suggest the fix
 - Rate severity: CRITICAL, HIGH, MEDIUM, LOW
+
+IMPORTANT: Only reference files that appear in the CODE CHANGES diff.
+Do NOT critique the story markdown or reference proposed files that weren't implemented.
 
 Output a structured review report in markdown format."""
 
 
 def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
-    """Get git diff from base branch.
+    """Get git diff from base branch, focusing on code files.
 
     Args:
         project_root: Project root directory
         base_branch: Base branch to compare against (auto-detected if None)
 
     Returns:
-        Git diff output
+        Git diff output (code files only, excludes .md, .yaml, .bak)
     """
     if base_branch is None:
         base_branch = get_default_branch(project_root)
@@ -58,27 +65,59 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
     if not validate_branch_name(base_branch):
         return f"No diff available (invalid branch name: {base_branch})"
 
+    # Use origin/ prefix to compare against remote (handles case where we're on the base branch)
+    remote_branch = f"origin/{base_branch}"
+
+    # Exclusions for non-code files (focus review on actual implementation)
+    exclusions = [
+        ":!*.md",
+        ":!*.yaml",
+        ":!*.yml",
+        ":!*.bak",
+        ":!*.bak.*",
+        ":!docs/*",
+    ]
+
     try:
-        # Get diff stats
+        # Get diff stats (code files only)
         stats = subprocess.run(
-            ["git", "diff", base_branch, "--stat"],
+            ["git", "diff", remote_branch, "--stat", "--"] + exclusions,
             cwd=project_root,
             capture_output=True,
             text=True,
         )
 
-        # Get full diff
+        # Get full diff (code files only)
         diff = subprocess.run(
-            ["git", "diff", base_branch],
+            ["git", "diff", remote_branch, "--"] + exclusions,
             cwd=project_root,
             capture_output=True,
             text=True,
         )
+
+        # If remote branch doesn't exist, fall back to local branch
+        if stats.returncode != 0 or "unknown revision" in stats.stderr.lower():
+            stats = subprocess.run(
+                ["git", "diff", base_branch, "--stat", "--"] + exclusions,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+            )
+            diff = subprocess.run(
+                ["git", "diff", base_branch, "--"] + exclusions,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+            )
 
         if stats.returncode != 0 or diff.returncode != 0:
             return "No diff available (git command failed)"
 
-        return f"{stats.stdout}\n\n{diff.stdout}"
+        result = f"{stats.stdout}\n\n{diff.stdout}".strip()
+        if not result or result == "\n\n":
+            return "No code changes found (only documentation/config changes)"
+
+        return result
 
     except Exception as e:
         return f"No diff available: {e}"

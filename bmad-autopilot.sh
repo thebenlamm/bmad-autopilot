@@ -515,13 +515,31 @@ review_story() {
 
     local default_branch
     default_branch=$(get_default_branch)
-    log "Comparing against branch: $default_branch"
 
+    # Use origin/ prefix to compare against remote (handles case where we're on the base branch)
+    local remote_branch="origin/$default_branch"
+    log "Comparing against: $remote_branch"
+
+    # Get diff of CODE files only (exclude docs, configs, backups)
     local diff_content
-    diff_content=$(cd "$PROJECT_ROOT" && git diff "$default_branch" --stat && git diff "$default_branch") || {
+    diff_content=$(cd "$PROJECT_ROOT" && {
+        # Try remote branch first, fall back to local if not available
+        if git diff "$remote_branch" --stat -- ':!*.md' ':!*.yaml' ':!*.yml' ':!*.bak' ':!*.bak.*' ':!docs/*' 2>/dev/null; then
+            git diff "$remote_branch" -- ':!*.md' ':!*.yaml' ':!*.yml' ':!*.bak' ':!*.bak.*' ':!docs/*' 2>/dev/null
+        else
+            log "${YELLOW}Remote branch not found, using local: $default_branch${NC}"
+            git diff "$default_branch" --stat -- ':!*.md' ':!*.yaml' ':!*.yml' ':!*.bak' ':!*.bak.*' ':!docs/*'
+            git diff "$default_branch" -- ':!*.md' ':!*.yaml' ':!*.yml' ':!*.bak' ':!*.bak.*' ':!docs/*'
+        fi
+    }) || {
         log "${YELLOW}Warning: Could not get git diff, using empty diff${NC}"
         diff_content="No diff available"
     }
+
+    if [[ -z "$diff_content" ]] || [[ "$diff_content" == $'\n' ]]; then
+        log "${YELLOW}Warning: No code changes found (only docs/config changes)${NC}"
+        diff_content="No code changes found (only documentation/config file changes)"
+    fi
 
     log "Running adversarial code review (timeout: ${LLM_TIMEOUT}s)..."
     local review_file="$STORIES_DIR/reviews/${story_key}-review.md"
@@ -537,27 +555,34 @@ review_story() {
         echo "=== STORY REQUIREMENTS ==="
         [[ -f "$story_file" ]] && cat "$story_file"
         echo ""
-        echo "=== CODE CHANGES ==="
+        echo "=== CODE CHANGES (git diff of implementation files) ==="
         echo "$diff_content"
     } > "$context_file"
 
     cat > "$system_file" << 'SYSTEM_EOF'
 You are an ADVERSARIAL Senior Developer performing code review.
 
-Your job is to find 3-10 specific issues in the code changes. You MUST find issues - 'looks good' is NOT acceptable.
+CRITICAL: You are reviewing the CODE CHANGES section (git diff), NOT the story requirements.
+The story requirements are provided only for context about what SHOULD have been implemented.
 
-Review for:
+Your job is to find 3-10 specific issues in the ACTUAL CODE that was written (shown in the diff).
+You MUST find issues - 'looks good' is NOT acceptable.
+
+Review the CODE CHANGES for:
 1. Code quality and patterns
 2. Test coverage gaps
-3. Security issues
+3. Security issues (injection, XSS, auth bypasses)
 4. Performance concerns
-5. Acceptance criteria satisfaction
+5. Whether the implementation satisfies acceptance criteria
 
 For each issue found:
 - Describe the problem specifically
-- Reference the file and line
+- Reference the ACTUAL file and line FROM THE DIFF
 - Suggest the fix
 - Rate severity: CRITICAL, HIGH, MEDIUM, LOW
+
+IMPORTANT: Only reference files that appear in the CODE CHANGES diff.
+Do NOT critique the story markdown or reference proposed files that weren't implemented.
 
 Output a structured review report.
 SYSTEM_EOF
