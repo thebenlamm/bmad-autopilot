@@ -322,6 +322,31 @@ When complete, the story status will be updated to 'review'."
 
         cd "$PROJECT_ROOT"
 
+        # Build list of "golden files" to pre-load for context
+        # These help aider understand the project structure without asking
+        local golden_files=()
+        local golden_candidates=(
+            "package.json"
+            "tsconfig.json"
+            "apps/backend/package.json"
+            "apps/frontend/package.json"
+            "apps/backend/tsconfig.json"
+            "apps/frontend/tsconfig.json"
+            "src/index.ts"
+            "apps/backend/src/index.ts"
+            "apps/frontend/src/index.ts"
+        )
+        for candidate in "${golden_candidates[@]}"; do
+            if [[ -f "$PROJECT_ROOT/$candidate" ]]; then
+                golden_files+=("--file" "$candidate")
+            fi
+        done
+
+        local golden_count=$((${#golden_files[@]} / 2))
+        if [[ $golden_count -gt 0 ]]; then
+            log "Pre-loading $golden_count context file(s) for aider"
+        fi
+
         # Snapshot git state BEFORE aider runs (to detect only NEW changes)
         local git_before
         git_before=$(mktemp)
@@ -341,6 +366,8 @@ When complete, the story status will be updated to 'review'."
             log "${RED}⚠ YOLO MODE: Auto-accepting all changes without review${NC}"
             aider --model "$AIDER_MODEL" \
                   --read "$story_file" \
+                  "${golden_files[@]}" \
+                  --map-tokens 2048 \
                   --message "$dev_prompt" \
                   --yes-always \
                   --no-stream \
@@ -363,6 +390,8 @@ When complete, the story status will be updated to 'review'."
             log "${YELLOW}Use --yolo flag for fully unattended mode (accepts all changes)${NC}"
             aider --model "$AIDER_MODEL" \
                   --read "$story_file" \
+                  "${golden_files[@]}" \
+                  --map-tokens 2048 \
                   --message "$dev_prompt" \
                   --no-auto-commits \
                   --no-show-model-warnings \
