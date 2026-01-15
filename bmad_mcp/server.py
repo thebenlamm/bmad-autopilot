@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import tempfile
 from typing import Any
 
 from mcp.server import Server
@@ -438,7 +439,8 @@ async def handle_verify_implementation(story_key: str, run_tests: bool = False) 
     # Check 1: Git has changes
     try:
         diff = get_git_diff(project.root)
-        has_changes = diff and "No diff available" not in diff and len(diff.strip()) > 50
+        # Fix: Check for non-empty diff, not arbitrary 50 chars (prevents false negatives on small fixes)
+        has_changes = diff and "No diff available" not in diff and len(diff.strip()) > 0
         if not has_changes:
             issues.append({
                 "check": "git_changes",
@@ -497,39 +499,41 @@ async def handle_verify_implementation(story_key: str, run_tests: bool = False) 
         })
 
     # Check 3: Run tests (only if explicitly requested for safety)
-    # Tests execute project code, which could be malicious in untrusted repos
     test_result = None
     if run_tests:
+        # Detect test runner based on project files
+        runner_cmd = None
+        if (project.root / "package.json").exists():
+            runner_cmd = ["npm", "test"]
+        else:
+            # Fallback to pytest for Python projects
+            runner_cmd = ["pytest", "-q"]
+
         try:
-            result = subprocess.run(
-                ["npm", "test"],
-                cwd=project.root,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if result.returncode == 0:
-                test_result = {"check": "tests", "passed": True, "message": "Tests passed"}
-            else:
-                test_result = {"check": "tests", "passed": False, "message": "Tests failed - fix before review"}
-        except FileNotFoundError:
-            # npm not found, try pytest
-            try:
-                result = subprocess.run(
-                    ["pytest", "-q"],
+            # Use temp files to prevent memory exhaustion from verbose test output
+            with tempfile.TemporaryFile(mode='w+') as out_f, tempfile.TemporaryFile(mode='w+') as err_f:
+                proc = subprocess.Popen(
+                    runner_cmd,
                     cwd=project.root,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
+                    stdout=out_f,
+                    stderr=err_f,
+                    text=True
                 )
-                if result.returncode == 0:
-                    test_result = {"check": "tests", "passed": True, "message": "Tests passed"}
-                else:
-                    test_result = {"check": "tests", "passed": False, "message": "Tests failed - fix before review"}
-            except FileNotFoundError:
-                test_result = {"check": "tests", "passed": None, "message": "No test runner found (npm/pytest)"}
-        except subprocess.TimeoutExpired:
-            test_result = {"check": "tests", "passed": None, "message": "Tests timed out - manual verification needed"}
+                
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    test_result = {"check": "tests", "passed": None, "message": "Tests timed out"}
+
+                if test_result is None:
+                    if proc.returncode == 0:
+                        test_result = {"check": "tests", "passed": True, "message": "Tests passed"}
+                    else:
+                        test_result = {"check": "tests", "passed": False, "message": "Tests failed - fix before review"}
+
+        except FileNotFoundError:
+            test_result = {"check": "tests", "passed": None, "message": f"Test runner '{runner_cmd[0]}' not found"}
         except Exception as e:
             test_result = {"check": "tests", "passed": None, "message": f"Could not run tests: {e}"}
 
@@ -543,8 +547,6 @@ async def handle_verify_implementation(story_key: str, run_tests: bool = False) 
         })
 
     # Determine if ready for review
-    # passed=None means skipped/unknown, which doesn't block review
-    # passed=False means failed, which blocks review
     failed_checks = [i for i in issues if i["passed"] is False]
     ready_for_review = len(failed_checks) == 0
 
@@ -594,8 +596,8 @@ async def handle_review_story(story_key: str) -> dict:
     result = review_story(project, story_key)
     review_content = result["review"]
 
-    # Parse structured issues from review
-    structured_issues = _parse_review_issues(review_content)
+    # Issues are already parsed in review_story
+    structured_issues = result.get("structured_issues", [])
 
     # Save review
     review_file = save_review(project, story_key, review_content)
@@ -650,95 +652,7 @@ async def handle_review_story(story_key: str) -> dict:
         )
 
 
-def _parse_review_issues(review_content: str) -> list[dict]:
-    """Parse structured issues from review markdown.
 
-    Handles multiple LLM output formats:
-    - **CRITICAL**: description
-    - CRITICAL: description
-    - ### CRITICAL
-    - - CRITICAL - description
-    - [CRITICAL] description
-    """
-    issues = []
-
-    # Multiple patterns to match different LLM output formats
-    patterns = [
-        # **CRITICAL**: description or **CRITICAL** description
-        r'\*\*(CRITICAL|HIGH|MEDIUM|LOW)\*\*[:\s]*(.+?)(?=\*\*(?:CRITICAL|HIGH|MEDIUM|LOW)\*\*|\n##|\n\*\*[A-Z]+\*\*|$)',
-        # CRITICAL: description (plain text)
-        r'(?:^|\n)(CRITICAL|HIGH|MEDIUM|LOW)[:\s]+(.+?)(?=\n(?:CRITICAL|HIGH|MEDIUM|LOW)[:\s]|\n##|$)',
-        # ### CRITICAL or ## CRITICAL (header style)
-        r'#{2,3}\s*(CRITICAL|HIGH|MEDIUM|LOW)[:\s]*\n(.+?)(?=\n#{2,3}|$)',
-        # [CRITICAL] description (bracket style)
-        r'\[(CRITICAL|HIGH|MEDIUM|LOW)\][:\s]*(.+?)(?=\[(?:CRITICAL|HIGH|MEDIUM|LOW)\]|\n##|$)',
-        # - CRITICAL - or * CRITICAL: (list style)
-        r'[-*]\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*[-:]\s*(.+?)(?=\n[-*]\s*(?:CRITICAL|HIGH|MEDIUM|LOW)|$)',
-        # Numbered: 1. **CRITICAL**: or 1. CRITICAL:
-        r'\d+\.\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW)\*{0,2}[:\s]+(.+?)(?=\n\d+\.\s*\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)|$)',
-    ]
-
-    seen_issues = set()  # Deduplicate
-
-    for pattern in patterns:
-        for match in re.finditer(pattern, review_content, re.DOTALL | re.IGNORECASE):
-            severity = match.group(1).upper()
-            content = match.group(2).strip()
-
-            # Skip if we've already captured this content
-            content_key = content[:50]
-            if content_key in seen_issues:
-                continue
-            seen_issues.add(content_key)
-
-            # Try to extract file reference with various formats
-            # Matches: `file.py:42`, 'file.py', file.py:42, (file.py, line 42)
-            file_patterns = [
-                r'[`\'"]([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)[`\'"]?[:\s]*(?:line\s*)?(\d+)?',
-                r'\(([a-zA-Z0-9_/.-]+\.[a-zA-Z]+),?\s*(?:line\s*)?(\d+)?\)',
-                r'(?:in|at|file)\s+([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)(?:[:\s]+(?:line\s*)?(\d+))?',
-            ]
-
-            file_path = None
-            line_num = None
-            for fp in file_patterns:
-                file_match = re.search(fp, content, re.IGNORECASE)
-                if file_match:
-                    file_path = file_match.group(1)
-                    line_num = file_match.group(2) if len(file_match.groups()) > 1 else None
-                    break
-
-            # Get first line as problem summary
-            lines = [l.strip() for l in content.split('\n') if l.strip()]
-            problem = lines[0] if lines else content[:100]
-
-            # Look for suggested fix with various keywords
-            fix_keywords = r'(?:fix|solution|suggest|change|should|instead|replace|use)[:\s]*(.+?)(?:\n|$)'
-            fix_match = re.search(fix_keywords, content, re.IGNORECASE)
-            fix = fix_match.group(1).strip() if fix_match else None
-
-            issues.append({
-                "severity": severity,
-                "problem": problem,
-                "file": file_path,
-                "line": int(line_num) if line_num else None,
-                "suggested_fix": fix,
-                "full_context": content[:500],
-            })
-
-    # If no structured issues found, create a generic one
-    if not issues and review_content:
-        has_critical = "CRITICAL" in review_content.upper()
-        issues.append({
-            "severity": "CRITICAL" if has_critical else "MEDIUM",
-            "problem": "Review found issues - see full review content",
-            "file": None,
-            "line": None,
-            "suggested_fix": None,
-            "full_context": review_content[:500],
-        })
-
-    return issues
 
 
 async def handle_update_status(story_key: str, status: str) -> dict:

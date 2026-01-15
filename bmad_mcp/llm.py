@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -18,7 +19,10 @@ def get_model(env_var: str, default: str) -> str:
 
 def get_timeout() -> int:
     """Get LLM timeout from environment."""
-    return int(os.environ.get("LLM_TIMEOUT", DEFAULT_TIMEOUT))
+    try:
+        return int(os.environ.get("LLM_TIMEOUT", DEFAULT_TIMEOUT))
+    except (ValueError, TypeError):
+        return DEFAULT_TIMEOUT
 
 
 def call_llm(
@@ -61,26 +65,48 @@ def call_llm(
     if timeout_cmd:
         cmd = [timeout_cmd, str(timeout)] + cmd
 
-    try:
-        result = subprocess.run(
-            cmd,
-            input=context,
-            capture_output=True,
-            text=True,
-            timeout=timeout + 10,  # Extra buffer for subprocess
-        )
+    # Use temp files to prevent memory exhaustion from massive outputs
+    with tempfile.TemporaryFile(mode='w+') as out_f, tempfile.TemporaryFile(mode='w+') as err_f:
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE if context else None,
+                stdout=out_f,
+                stderr=err_f,
+                text=True,
+            )
 
-        if result.returncode == 124:
-            raise RuntimeError(f"LLM call timed out after {timeout}s")
+            if context:
+                try:
+                    process.stdin.write(context)
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass  # Process died early
 
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            raise RuntimeError(f"LLM call failed: {stderr}")
+            try:
+                process.wait(timeout=timeout + 10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                raise RuntimeError(f"LLM call timed out after {timeout}s")
 
-        return result.stdout.strip()
+            # Limit output read to 1MB to prevent memory exhaustion
+            out_f.seek(0)
+            err_f.seek(0)
+            stdout = out_f.read(1_000_000)
+            stderr = err_f.read(1_000_000)
 
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"LLM call timed out after {timeout}s")
+            if process.returncode == 124:
+                raise RuntimeError(f"LLM call timed out after {timeout}s")
+
+            if process.returncode != 0:
+                raise RuntimeError(f"LLM call failed: {stderr.strip()}")
+
+            return stdout.strip()
+
+        except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"LLM call failed: {e}")
 
 
 def _get_timeout_command() -> str | None:

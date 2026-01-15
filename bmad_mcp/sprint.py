@@ -1,7 +1,10 @@
 """Sprint status YAML operations."""
 
 import os
+import sys
 import tempfile
+import fcntl
+import contextlib
 from pathlib import Path
 from typing import Literal
 
@@ -13,10 +16,25 @@ Status = Literal["backlog", "ready-for-dev", "in-progress", "review", "done", "b
 VALID_STATUSES = {"backlog", "ready-for-dev", "in-progress", "review", "done", "blocked"}
 
 
+@contextlib.contextmanager
+def _sprint_lock(path: Path):
+    """File lock context manager to prevent race conditions."""
+    lock_path = path.parent / ".sprint-status.lock"
+    with open(lock_path, 'w') as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
 def load_sprint_status(path: Path) -> dict:
     """Load sprint-status.yaml."""
-    with open(path) as f:
-        return yaml.safe_load(f) or {}
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except (yaml.YAMLError, FileNotFoundError):
+        return {}
 
 
 def save_sprint_status(path: Path, data: dict):
@@ -32,8 +50,8 @@ def save_sprint_status(path: Path, data: dict):
     try:
         with os.fdopen(fd, 'w') as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-        # Atomic rename (on POSIX systems)
-        os.rename(temp_path, path)
+        # Atomic rename (replace handles existing files on Windows too)
+        os.replace(temp_path, path)
     except Exception:
         # Clean up temp file on failure
         if os.path.exists(temp_path):
@@ -81,12 +99,14 @@ def update_story_status(path: Path, story_key: str, new_status: Status) -> bool:
     if new_status not in VALID_STATUSES:
         raise ValueError(f"Invalid status: {new_status}")
 
-    data = load_sprint_status(path)
-    if "development_status" not in data:
-        data["development_status"] = {}
+    # Use lock to prevent lost updates during read-modify-write cycle
+    with _sprint_lock(path):
+        data = load_sprint_status(path)
+        if "development_status" not in data:
+            data["development_status"] = {}
 
-    data["development_status"][story_key] = new_status
-    save_sprint_status(path, data)
+        data["development_status"][story_key] = new_status
+        save_sprint_status(path, data)
 
     # Verify
     actual = get_development_status(path).get(story_key)

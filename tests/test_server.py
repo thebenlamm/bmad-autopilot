@@ -2,7 +2,7 @@
 
 import pytest
 
-from bmad_mcp.server import _parse_review_issues
+from bmad_mcp.phases.review import parse_review_issues
 from bmad_mcp.project import validate_story_key
 
 
@@ -21,7 +21,7 @@ Fix: Use parameterized queries.
 **HIGH**: Missing null check in `src/api.py:15`
 Could cause NullPointerException.
 """
-        issues = _parse_review_issues(review)
+        issues = parse_review_issues(review)
         assert len(issues) >= 2
 
         critical = [i for i in issues if i["severity"] == "CRITICAL"]
@@ -34,7 +34,7 @@ Could cause NullPointerException.
 **MEDIUM**: Missing error handling in `src/handlers/auth.py:123`
 Should wrap in try-catch.
 """
-        issues = _parse_review_issues(review)
+        issues = parse_review_issues(review)
         assert len(issues) >= 1
         # File should be extracted
         assert any(i.get("file") for i in issues)
@@ -45,7 +45,7 @@ Should wrap in try-catch.
 **LOW**: Style issue in `utils.py:42`
 Consider using const instead of let.
 """
-        issues = _parse_review_issues(review)
+        issues = parse_review_issues(review)
         file_issues = [i for i in issues if i.get("file")]
         if file_issues:
             assert any(i.get("line") == 42 for i in file_issues)
@@ -57,14 +57,14 @@ This code has some problems.
 There's a critical security issue.
 Please fix it.
 """
-        issues = _parse_review_issues(review)
+        issues = parse_review_issues(review)
         assert len(issues) >= 1
         # Should create a generic issue
         assert issues[0]["severity"] in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
 
     def test_empty_review(self):
         """Handle empty review content."""
-        issues = _parse_review_issues("")
+        issues = parse_review_issues("")
         assert issues == []
 
     def test_multiple_severities(self):
@@ -75,10 +75,27 @@ Please fix it.
 **MEDIUM**: Code style
 **LOW**: Documentation missing
 """
-        issues = _parse_review_issues(review)
+        issues = parse_review_issues(review)
         severities = [i["severity"] for i in issues]
         assert "CRITICAL" in severities
         assert "HIGH" in severities
+
+    def test_ignores_issues_in_code_blocks(self):
+        """Ignore 'CRITICAL' markers inside code blocks."""
+        review = """
+Here is a code example:
+```python
+# CRITICAL: This is just a comment
+print("Hello")
+```
+But this is real:
+**CRITICAL**: Real issue here.
+"""
+        issues = parse_review_issues(review)
+        critical = [i for i in issues if i["severity"] == "CRITICAL"]
+        # Should only find the real one
+        assert len(critical) == 1
+        assert "Real issue here" in critical[0]["problem"]
 
 
 class TestValidateStoryKey:
