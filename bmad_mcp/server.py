@@ -24,6 +24,7 @@ from .phases import create_story, get_development_instructions, review_story
 from .phases.create import save_story
 from .phases.review import save_review, get_git_diff
 from .auto_fix import ReviewIssueParser, FixStrategyEngine, FormattingStrategy, AutoFixReport
+from .context import ContextIndexer
 
 
 # Global project context
@@ -197,6 +198,39 @@ async def list_tools() -> list[Tool]:
                 "required": ["story_key"],
             },
         ),
+        Tool(
+            name="bmad_index_project",
+            description="Index the project codebase for context-aware development. Scans Python files and extracts functions/classes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force reindex even if index exists",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="bmad_search_context",
+            description="Search indexed code for relevant implementations. Returns matching functions/classes with code snippets.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (keywords like 'user authentication login')",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -255,6 +289,15 @@ async def _handle_tool(name: str, arguments: dict) -> dict:
         return await handle_auto_fix(
             arguments["story_key"],
             dry_run=arguments.get("dry_run", False),
+        )
+    elif name == "bmad_index_project":
+        return await handle_index_project(
+            force=arguments.get("force", False),
+        )
+    elif name == "bmad_search_context":
+        return await handle_search_context(
+            arguments["query"],
+            max_results=arguments.get("max_results", 5),
         )
     else:
         return make_response(False, error=f"Unknown tool: {name}")
@@ -914,6 +957,122 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
             ],
         },
         next_step=next_step,
+    )
+
+
+async def handle_index_project(force: bool = False) -> dict:
+    """Handle bmad_index_project - index codebase for context retrieval.
+
+    Args:
+        force: If True, reindex even if index exists
+    """
+    project = ctx.require_project()
+
+    indexer = ContextIndexer(project_root=project.root)
+
+    # Check if already indexed
+    if indexer.is_indexed() and not force:
+        metadata = indexer.get_metadata()
+        return make_response(
+            True,
+            data={
+                "already_indexed": True,
+                "files_indexed": metadata.files_indexed if metadata else 0,
+                "symbols_indexed": metadata.symbols_indexed if metadata else 0,
+                "message": "Index already exists. Use force=true to reindex.",
+            },
+            next_step={
+                "action": "Search the index",
+                "tool": "bmad_search_context",
+                "example": {"query": "authentication login user"},
+            },
+        )
+
+    # Run indexing
+    stats = indexer.index(force=force)
+
+    return make_response(
+        True,
+        data={
+            "indexed": True,
+            "files_indexed": stats["files_indexed"],
+            "symbols_indexed": stats["symbols_indexed"],
+            "index_dir": stats["index_dir"],
+        },
+        next_step={
+            "action": "Search the index",
+            "tool": "bmad_search_context",
+            "example": {"query": "authentication login user"},
+        },
+    )
+
+
+async def handle_search_context(query: str, max_results: int = 5) -> dict:
+    """Handle bmad_search_context - search indexed code.
+
+    Args:
+        query: Search query string
+        max_results: Maximum number of results
+    """
+    project = ctx.require_project()
+
+    indexer = ContextIndexer(project_root=project.root)
+
+    # Check if indexed
+    if not indexer.is_indexed():
+        return make_response(
+            False,
+            error="Project not indexed. Run bmad_index_project first.",
+            next_step={
+                "action": "Index the project first",
+                "tool": "bmad_index_project",
+            },
+        )
+
+    # Search
+    results = indexer.search(query, max_results)
+
+    if not results:
+        return make_response(
+            True,
+            data={
+                "query": query,
+                "results": [],
+                "message": "No matching code found",
+            },
+        )
+
+    # Format results with code snippets
+    formatted_results = []
+    for entry in results:
+        file_path = project.root / entry.file_path
+        snippet = ""
+        if file_path.exists():
+            try:
+                lines = file_path.read_text().split("\n")
+                start = max(0, entry.line_start - 1)
+                end = min(len(lines), entry.line_end)
+                snippet = "\n".join(lines[start:end])
+            except Exception:
+                pass
+
+        formatted_results.append({
+            "file": entry.file_path,
+            "symbol": entry.symbol_name,
+            "type": entry.symbol_type,
+            "lines": f"{entry.line_start}-{entry.line_end}",
+            "signature": entry.signature,
+            "docstring": entry.docstring,
+            "snippet": snippet[:500] if snippet else None,
+        })
+
+    return make_response(
+        True,
+        data={
+            "query": query,
+            "results": formatted_results,
+            "count": len(formatted_results),
+        },
     )
 
 
