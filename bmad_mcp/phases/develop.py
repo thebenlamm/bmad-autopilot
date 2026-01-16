@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from ..project import ProjectPaths
+from ..context import ContextRetriever
 
 
 def get_development_instructions(project: ProjectPaths, story_key: str) -> dict:
@@ -10,6 +11,7 @@ def get_development_instructions(project: ProjectPaths, story_key: str) -> dict:
 
     Instead of shelling to aider/claude, this returns the story content
     with structured instructions for the calling Claude to implement directly.
+    Includes relevant code context from existing implementation.
 
     Args:
         project: Project paths
@@ -28,12 +30,22 @@ def get_development_instructions(project: ProjectPaths, story_key: str) -> dict:
     # Parse tasks from story (look for checkboxes)
     tasks = _extract_tasks(story_content)
 
+    # Retrieve context
+    retriever = ContextRetriever(project.root)
+    context_section = ""
+    try:
+        context_section = retriever.retrieve_formatted(story_content)
+    except Exception as e:
+        # Don't fail dev phase if context retrieval fails
+        context_section = f"<!-- Context retrieval failed: {e} -->"
+
     return {
         "story_key": story_key,
         "story_file": str(story_file),
         "story_content": story_content,
         "tasks": tasks,
-        "instructions": _build_instructions(story_key, project),
+        "context": context_section,
+        "instructions": _build_instructions(story_key, project, context_section),
     }
 
 
@@ -64,7 +76,7 @@ def _extract_tasks(content: str) -> list[dict]:
     return tasks
 
 
-def _build_instructions(story_key: str, project: ProjectPaths) -> str:
+def _build_instructions(story_key: str, project: ProjectPaths, context: str = "") -> str:
     """Build implementation instructions."""
     return f"""## Implementation Instructions
 
@@ -76,6 +88,8 @@ def _build_instructions(story_key: str, project: ProjectPaths) -> str:
 5. When all tasks are complete, update the story status:
    - Use bmad_update_status("{story_key}", "review")
 
+{context}
+
 ## Project Context
 
 - Project root: {project.root}
@@ -83,7 +97,7 @@ def _build_instructions(story_key: str, project: ProjectPaths) -> str:
 
 ## Tips
 
-- Follow existing code patterns in the project
+- Follow existing code patterns in the project (see Reference Implementation above)
 - Write tests for new functionality
 - Commit logical chunks of work
 """

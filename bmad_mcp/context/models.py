@@ -57,6 +57,37 @@ class IndexEntry:
 
 
 @dataclass
+class FileChecksum:
+    """Tracks a file's state for freshness detection.
+
+    Attributes:
+        path: Relative file path
+        mtime: Modification timestamp
+        size: File size in bytes
+    """
+    path: str
+    mtime: float
+    size: int
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "path": self.path,
+            "mtime": self.mtime,
+            "size": self.size,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FileChecksum":
+        """Deserialize from dictionary."""
+        return cls(
+            path=d["path"],
+            mtime=d["mtime"],
+            size=d["size"],
+        )
+
+
+@dataclass
 class IndexMetadata:
     """Metadata about the index state.
 
@@ -65,11 +96,13 @@ class IndexMetadata:
         files_indexed: Number of files indexed
         symbols_indexed: Number of symbols indexed
         last_indexed: Timestamp of last indexing
+        file_checksums: Dict of file paths to their checksums for freshness detection
     """
     project_root: str
     files_indexed: int = 0
     symbols_indexed: int = 0
     last_indexed: datetime = field(default_factory=datetime.now)
+    file_checksums: dict[str, FileChecksum] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialize to dictionary."""
@@ -78,14 +111,24 @@ class IndexMetadata:
             "files_indexed": self.files_indexed,
             "symbols_indexed": self.symbols_indexed,
             "last_indexed": self.last_indexed.isoformat(),
+            "file_checksums": {
+                path: cs.to_dict() for path, cs in self.file_checksums.items()
+            },
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "IndexMetadata":
         """Deserialize from dictionary."""
+        checksums = {}
+        if "file_checksums" in d:
+            checksums = {
+                path: FileChecksum.from_dict(cs)
+                for path, cs in d["file_checksums"].items()
+            }
         return cls(
             project_root=d["project_root"],
             files_indexed=d["files_indexed"],
             symbols_indexed=d["symbols_indexed"],
             last_indexed=datetime.fromisoformat(d["last_indexed"]),
+            file_checksums=checksums,
         )

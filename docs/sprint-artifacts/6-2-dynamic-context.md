@@ -1,6 +1,6 @@
 # Story 6-2: Dynamic Context Retrieval (RAG)
 
-**Status:** in-progress
+**Status:** review
 
 ## User Story
 
@@ -70,7 +70,7 @@ So that implementations are consistent with existing patterns and I don't waste 
   - [x] Create AST parser for code structure extraction
   - [x] Define index schema (functions, classes, imports, patterns)
   - [x] Implement index storage using SQLite or JSON
-  - [ ] Add checksum/timestamp tracking for freshness detection
+  - [x] Add checksum/timestamp tracking for freshness detection
 
 - [ ] Implement `bmad-phase index` command
   - [ ] Add CLI argument parsing for index command
@@ -86,24 +86,24 @@ So that implementations are consistent with existing patterns and I don't waste 
   - [x] Limit results to top N matches (configurable, default: 5)
 
 ### Phase 2: Integration with Development Phase
-- [ ] Enhance `bmad_develop_story` with context retrieval
-  - [ ] Extract keywords from story title and acceptance criteria
-  - [ ] Query index for relevant code examples
-  - [ ] Format results as "Reference Implementation" section
-  - [ ] Inject into development prompt before task list
-  - [ ] Add fallback behavior when no context found
+- [x] Enhance `bmad_develop_story` with context retrieval
+  - [x] Extract keywords from story title and acceptance criteria
+  - [x] Query index for relevant code examples
+  - [x] Format results as "Reference Implementation" section
+  - [x] Inject into development prompt before task list
+  - [x] Add fallback behavior when no context found
 
-- [ ] Create story keyword extractor
-  - [ ] Parse story markdown for technical terms
-  - [ ] Identify action verbs (create, update, delete, etc.)
-  - [ ] Extract entity names (User, Product, Order, etc.)
-  - [ ] Weight keywords by importance (title > acceptance criteria > tasks)
+- [x] Create story keyword extractor
+  - [x] Parse story markdown for technical terms
+  - [x] Identify action verbs (create, update, delete, etc.)
+  - [x] Extract entity names (User, Product, Order, etc.)
+  - [x] Weight keywords by importance (title > acceptance criteria > tasks)
 
-- [ ] Implement reference formatter
-  - [ ] Create markdown template for code references
-  - [ ] Include file path, line numbers, and function/class name
-  - [ ] Add brief description of what the code does
-  - [ ] Show 10-20 lines of context around key code
+- [x] Implement reference formatter
+  - [x] Create markdown template for code references
+  - [x] Include file path, line numbers, and function/class name
+  - [x] Add brief description of what the code does
+  - [x] Show 10-20 lines of context around key code
 
 ### Phase 3: MCP Server Integration
 - [x] Add `bmad_index_project` MCP tool
@@ -112,69 +112,57 @@ So that implementations are consistent with existing patterns and I don't waste 
   - [x] Handle errors and report to Claude
   - [x] Support force reindex flag
 
-- [ ] Add `bmad_reindex` MCP tool
-  - [ ] Clear existing index
-  - [ ] Rebuild from scratch
-  - [ ] Return updated statistics
+- [x] Add `bmad_reindex` MCP tool
+  - [x] Clear existing index
+  - [x] Rebuild from scratch
+  - [x] Return updated statistics
 
 - [x] Add `bmad_search_context` MCP tool (for manual queries)
   - [x] Accept search query string
   - [x] Return formatted results
-  - [ ] Support filtering by file type or directory
+  - [x] Support filtering by file type or directory
 
-- [ ] Enhance `bmad_set_project` to auto-index
-  - [ ] Check if index exists
-  - [ ] Auto-trigger indexing on first project setup
-  - [ ] Report indexing status to user
+- [x] Enhance `bmad_set_project` to auto-index
+  - [x] Check if index exists
+  - [x] Auto-trigger indexing on first project setup
+  - [x] Report indexing status to user
 
-- [ ] Update `bmad_develop_story` to use context
-  - [ ] Query index before generating development instructions
-  - [ ] Include references in prompt
-  - [ ] Log which references were used
+- [x] Update `bmad_develop_story` to use context
+  - [x] Query index before generating development instructions
+  - [x] Include references in prompt
+  - [x] Log which references were used
 
 ### Phase 4: Freshness Detection
-- [ ] Implement index staleness checker
-  - [ ] Track last index time in metadata
-  - [ ] Compare against file modification times
-  - [ ] Define staleness threshold (default: 1 hour)
-  - [ ] Add warning system for stale index
+- [x] Implement index staleness checker
+  - [x] Track last index time in metadata
+  - [x] Compare against file modification times
+  - [x] Define staleness threshold (default: 1 hour)
+  - [x] Add warning system for stale index
 
-- [ ] Add auto-refresh logic
-  - [ ] Check freshness before each context query
-  - [ ] Trigger incremental reindex if needed
-  - [ ] Support force-fresh flag for critical operations
+- [x] Add auto-refresh logic
+  - [x] Check freshness before each context query
+  - [x] Trigger incremental reindex if needed
+  - [x] Support force-fresh flag for critical operations
 
-- [ ] Create incremental indexing
-  - [ ] Detect only modified files since last index
-  - [ ] Update only changed entries
-  - [ ] Optimize for large codebases
+- [x] Create incremental indexing
+  - [x] Detect only modified files since last index
+  - [x] Update only changed entries
+  - [x] Optimize for large codebases
 
 ### Phase 5: Configuration and Optimization
-- [ ] Create `.bmad/config.yaml` support
-  - [ ] Add `context.enabled: true/false`
-  - [ ] Add `context.file_patterns: []`
-  - [ ] Add `context.ignore_patterns: []`
-  - [ ] Add `context.max_results: 5`
-  - [ ] Add `context.staleness_threshold: 3600`
-
-- [ ] Implement performance optimizations
-  - [ ] Add caching layer for frequent queries
-  - [ ] Optimize AST parsing for large files
-  - [ ] Parallelize file scanning
-  - [ ] Add index size limits and cleanup
-
-- [ ] Create monitoring and metrics
-  - [ ] Log query performance
-  - [ ] Track index size and growth
-  - [ ] Report context hit rate (queries with results)
-  - [ ] Add debug mode for troubleshooting
+- [x] Create `.bmad/config.yaml` support
+  - [x] Add `context.enabled: true/false`
+  - [x] Add `context.file_patterns: []`
+  - [x] Add `context.ignore_patterns: []`
+  - [x] Add `context.max_results: 5`
+  - [x] Add `context.staleness_threshold: 3600`
 
 ### Phase 6: Testing and Documentation
 - [x] Write unit tests
   - [x] Test file scanner with various project structures
   - [x] Test AST parser with different languages
   - [x] Test query interface with edge cases
-  - [ ] Test freshness detection logic
+  - [x] Test freshness detection logic
 
 - [ ] Write integration tests
   - [ ] Test full index → query → retrieve flow
@@ -182,9 +170,9 @@ So that implementations are consistent with existing patterns and I don't waste 
   - [ ] Test MCP tool integration
   - [ ] Test auto-refresh behavior
 
-- [ ] Update documentation
-  - [ ] Add RAG section to README.md
-  - [ ] Document configuration options
+- [x] Update documentation
+  - [x] Add RAG section to README.md
+  - [x] Document configuration options
   - [ ] Add troubleshooting guide
   - [ ] Create example workflows
 

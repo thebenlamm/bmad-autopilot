@@ -75,6 +75,11 @@ class FileScanner:
     def _should_ignore(self, file_path: Path, root: Path) -> bool:
         """Check if file should be ignored.
 
+        Handles glob patterns including:
+        - **/.venv/** - ignore directories named .venv anywhere
+        - **/*.min.js - ignore files matching pattern anywhere
+        - *.test.* - ignore files matching pattern
+
         Args:
             file_path: File to check
             root: Root directory
@@ -88,42 +93,49 @@ class FileScanner:
         except ValueError:
             rel_path = file_path
 
-        rel_str = str(rel_path)
-        # Also check with forward slashes for consistency
-        rel_str_normalized = rel_str.replace("\\", "/")
+        path_parts = rel_path.parts
+        filename = file_path.name
 
         for pattern in self.ignore_patterns:
-            # Handle **/.venv/** style patterns - check if any path component matches
-            if "**" in pattern:
-                # Extract the directory/file name to match
-                # e.g., "**/.venv/**" -> ".venv"
-                # e.g., "**/node_modules/**" -> "node_modules"
-                pattern_clean = pattern.replace("**", "").strip("/")
-
-                if pattern_clean:
-                    # Check if any part of the path contains this component
-                    path_parts = rel_path.parts
-                    for part in path_parts:
-                        if fnmatch.fnmatch(part, pattern_clean):
-                            return True
-                        # Direct match
-                        if part == pattern_clean:
-                            return True
-
-                # Also check suffix patterns like **/*.min.js
-                if pattern.startswith("**/"):
-                    suffix_pattern = pattern[3:]  # Remove **/
-                    if fnmatch.fnmatch(file_path.name, suffix_pattern):
-                        return True
-                    if fnmatch.fnmatch(rel_str_normalized, suffix_pattern):
-                        return True
-
-            # Simple glob patterns
-            elif fnmatch.fnmatch(rel_str, pattern):
-                return True
-            elif fnmatch.fnmatch(rel_str_normalized, pattern):
-                return True
-            elif fnmatch.fnmatch(file_path.name, pattern):
+            if self._matches_pattern(rel_path, path_parts, filename, pattern):
                 return True
 
         return False
+
+    def _matches_pattern(
+        self, rel_path: Path, path_parts: tuple, filename: str, pattern: str
+    ) -> bool:
+        """Check if a path matches an ignore pattern.
+
+        Args:
+            rel_path: Relative path
+            path_parts: Tuple of path components
+            filename: Just the filename
+            pattern: Ignore pattern to check
+
+        Returns:
+            True if matches
+        """
+        # Pattern: **/dirname/** - match if dirname appears anywhere in path
+        if pattern.startswith("**/") and pattern.endswith("/**"):
+            dirname = pattern[3:-3]  # Extract "dirname" from "**/dirname/**"
+            return dirname in path_parts
+
+        # Pattern: **/*.ext or **/*.pattern.* - match filename anywhere
+        if pattern.startswith("**/"):
+            file_pattern = pattern[3:]  # Remove **/
+            if fnmatch.fnmatch(filename, file_pattern):
+                return True
+            # Also try matching full relative path
+            rel_str = str(rel_path).replace("\\", "/")
+            if fnmatch.fnmatch(rel_str, file_pattern):
+                return True
+            return False
+
+        # Pattern: *.ext or simple pattern - match filename only
+        if fnmatch.fnmatch(filename, pattern):
+            return True
+
+        # Try matching full relative path
+        rel_str = str(rel_path).replace("\\", "/")
+        return fnmatch.fnmatch(rel_str, pattern)

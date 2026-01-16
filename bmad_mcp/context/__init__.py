@@ -6,6 +6,7 @@ from .parser import PythonParser
 from .storage import IndexStorage
 from .search import ContextSearch
 from .indexer import ContextIndexer
+from .retriever import ContextRetriever
 
 __all__ = [
     "IndexEntry",
@@ -15,4 +16,5 @@ __all__ = [
     "IndexStorage",
     "ContextSearch",
     "ContextIndexer",
+    "ContextRetriever",
 ]
