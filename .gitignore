@@ -38,3 +38,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# BMAD local state
+.bmad/
+docs/sprint-artifacts/.sprint-status.lock
