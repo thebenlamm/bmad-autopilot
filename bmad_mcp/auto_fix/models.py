@@ -69,6 +69,11 @@ class AutoFixReport:
         return sum(1 for r in self.results if r.status == "success")
 
     @property
+    def dry_run_count(self) -> int:
+        """Number of issues that would be fixed in dry run."""
+        return sum(1 for r in self.results if r.status == "dry_run")
+
+    @property
     def failed_count(self) -> int:
         """Number of failed fixes."""
         return sum(1 for r in self.results if r.status == "failed")
@@ -80,7 +85,9 @@ class AutoFixReport:
 
     @property
     def fix_rate(self) -> float:
-        """Ratio of successful fixes to total issues."""
+        """Ratio of successful (or potentially successful) fixes to total issues."""
         if self.total_issues == 0:
             return 0.0
-        return self.fixed_count / self.total_issues
+        # Count both success and dry_run as "fixable"
+        fixable = sum(1 for r in self.results if r.status in ("success", "dry_run"))
+        return fixable / self.total_issues

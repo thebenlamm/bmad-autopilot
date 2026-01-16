@@ -1,5 +1,6 @@
 """Base class for fix strategies."""
 
+import ast
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -63,3 +64,20 @@ class FixStrategy(ABC):
                 return False
 
         return True
+
+    def validate_ast_equivalence(self, old_content: str, new_content: str) -> bool:
+        """Check if two Python sources are AST-equivalent (ignoring formatting).
+
+        Args:
+            old_content: Original source
+            new_content: New source
+
+        Returns:
+            True if ASTs are identical (logic is preserved)
+        """
+        try:
+            tree1 = ast.parse(old_content)
+            tree2 = ast.parse(new_content)
+            return ast.dump(tree1) == ast.dump(tree2)
+        except SyntaxError:
+            return False

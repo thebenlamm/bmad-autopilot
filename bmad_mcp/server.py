@@ -867,6 +867,29 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
 
     project = ctx.require_project()
 
+    # Safety Check: Ensure clean git state before applying fixes
+    if not dry_run:
+        try:
+            status_output = subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                cwd=project.root,
+                text=True,
+                timeout=5
+            )
+            if status_output.strip():
+                return make_response(
+                    False,
+                    error="Working directory is not clean. Commit or stash changes before running auto-fix to prevent data loss.",
+                    next_step={
+                        "action": "Check git status",
+                        "tool": "run_shell_command",
+                        "args": {"command": "git status"},
+                    },
+                )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            # If not a git repo or git missing, we proceed with caution (or could fail)
+            pass
+
     # Find the review file
     reviews_dir = project.stories_dir / "reviews"
     review_file = reviews_dir / f"{story_key}-review.md"
@@ -883,7 +906,7 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
         )
 
     # Parse the review
-    parser = ReviewIssueParser()
+    parser = ReviewIssueParser(project_root=project.root)
     issues = parser.parse_file(review_file)
 
     if not issues:
@@ -913,7 +936,7 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
     report = AutoFixReport(story_key=story_key, results=results)
 
     # Determine next step based on results
-    if report.fixed_count > 0 and not dry_run:
+    if (report.fixed_count > 0 or report.dry_run_count > 0) and not dry_run:
         next_step = {
             "action": "Re-verify after auto-fix",
             "tool": "bmad_verify_implementation",
@@ -924,7 +947,7 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
             "action": "Manual fixes needed",
             "remaining_issues": [
                 {"severity": r.issue.severity, "problem": r.issue.problem, "file": r.issue.file}
-                for r in results if r.status != "success"
+                for r in results if r.status != "success" and r.status != "dry_run"
             ],
         }
     else:
@@ -941,6 +964,7 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
             "dry_run": dry_run,
             "total_issues": report.total_issues,
             "fixed_count": report.fixed_count,
+            "dry_run_count": report.dry_run_count,
             "failed_count": report.failed_count,
             "skipped_count": report.skipped_count,
             "fix_rate": report.fix_rate,

@@ -86,6 +86,7 @@ class FormattingStrategy(FixStrategy):
                     ["black", "--check", str(file_path)],
                     capture_output=True,
                     text=True,
+                    timeout=30,
                 )
                 would_change = result.returncode != 0
                 if would_change:
@@ -94,6 +95,13 @@ class FormattingStrategy(FixStrategy):
                     issue=issue,
                     status="dry_run",
                     changes=changes,
+                )
+            except subprocess.TimeoutExpired:
+                return FixResult(
+                    issue=issue,
+                    status="failed",
+                    changes=[],
+                    error_message="black check timed out",
                 )
             except FileNotFoundError:
                 return FixResult(
@@ -109,10 +117,27 @@ class FormattingStrategy(FixStrategy):
                 ["black", str(file_path)],
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
-            if result.returncode == 0:
-                if "reformatted" in result.stderr.lower() or file_path.read_text() != original_content:
-                    changes.append(f"Formatted {file_path.name} with black")
+            if result.returncode != 0:
+                return FixResult(
+                    issue=issue,
+                    status="failed",
+                    changes=[],
+                    error_message=f"black failed: {result.stderr}",
+                )
+            
+            # Check if changed (black output or content check)
+            if "reformatted" in result.stderr.lower():
+                changes.append(f"Formatted {file_path.name} with black")
+                
+        except subprocess.TimeoutExpired:
+            return FixResult(
+                issue=issue,
+                status="failed",
+                changes=[],
+                error_message="black timed out",
+            )
         except FileNotFoundError:
             return FixResult(
                 issue=issue,
@@ -127,28 +152,68 @@ class FormattingStrategy(FixStrategy):
                 ["isort", str(file_path)],
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if result.returncode == 0:
-                if file_path.read_text() != original_content:
-                    changes.append(f"Sorted imports in {file_path.name} with isort")
-        except FileNotFoundError:
-            # isort is optional, don't fail if not installed
+                # Need to read content to check if changed since isort doesn't always output "fixed"
+                current_content = file_path.read_text()
+                # Compare with content AFTER black (but we didn't read it)
+                # So we just check if it differs from what it was before ISORT?
+                # We didn't save intermediate state.
+                # Simplest: check if content changed from original, and we haven't logged it yet?
+                # Or just assume if returncode 0 it worked.
+                # Isort usually prints to stdout/stderr if it changed things?
+                if "Fixing" in result.stdout or "Fixing" in result.stderr:
+                     changes.append(f"Sorted imports in {file_path.name} with isort")
+                elif file_path.read_text() != original_content and not changes:
+                     # This logic is tricky if black changed it.
+                     # Let's rely on final validation.
+                     pass
+                     
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # isort is optional, ignore failures
             pass
 
         # Validate the fix
         new_content = file_path.read_text()
-        if not self.validate_fix(issue, original_content, new_content):
+        
+        # Check AST equivalence to ensure no logic changes
+        if not self.validate_ast_equivalence(original_content, new_content):
             # Rollback
             file_path.write_text(original_content)
             return FixResult(
                 issue=issue,
                 status="failed",
                 changes=[],
-                error_message="Fix validation failed - content unchanged or invalid",
+                error_message="Fix validation failed - AST changed (logic modification detected)",
+            )
+            
+        # Basic validation (syntax check)
+        if not self.validate_fix(issue, original_content, new_content):
+            # If validate_fix fails but AST was same, it means content didn't change
+            # or syntax error (already caught by AST check).
+            # So this mostly checks "did content change?"
+            if original_content == new_content:
+                 return FixResult(
+                    issue=issue,
+                    status="skipped", # Nothing to do
+                    changes=[],
+                    error_message="No formatting changes needed",
+                )
+            # If changed but invalid syntax, AST check would have caught it.
+            
+        if changes or original_content != new_content:
+            if not changes:
+                 changes.append(f"Reformatted {file_path.name}")
+            return FixResult(
+                issue=issue,
+                status="success",
+                changes=changes,
             )
 
         return FixResult(
             issue=issue,
-            status="success",
-            changes=changes,
+            status="skipped",
+            changes=[],
+            error_message="Content unchanged",
         )

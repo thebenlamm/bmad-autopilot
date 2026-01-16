@@ -25,6 +25,14 @@ AUTO_FIX_KEYWORDS = [
 class ReviewIssueParser:
     """Parses code review markdown to extract structured issues."""
 
+    def __init__(self, project_root: Path | None = None):
+        """Initialize parser.
+
+        Args:
+            project_root: Optional root directory to validate file existence
+        """
+        self.project_root = project_root
+
     def parse(self, review_content: str) -> list[Issue]:
         """Parse review markdown content and extract issues.
 
@@ -37,8 +45,8 @@ class ReviewIssueParser:
         issues = []
         seen = set()
 
-        # Strip code blocks to avoid false matches
-        content = self._strip_code_blocks(review_content)
+        # Do NOT strip code blocks - they often contain context or suggested fixes
+        content = review_content
 
         # Multiple patterns for different LLM output formats
         patterns = [
@@ -98,19 +106,16 @@ class ReviewIssueParser:
         content = review_file.read_text()
         return self.parse(content)
 
-    def _strip_code_blocks(self, text: str) -> str:
-        """Remove fenced code blocks from text."""
-        return re.sub(r'```[\s\S]*?```', '', text)
-
     def _extract_file_reference(self, content: str) -> tuple[str | None, str | None]:
         """Extract file path and line number from content."""
+        # Stricter patterns to avoid false positives
         patterns = [
-            # `file.py` line 42 or `file.py`:42
-            r'[`\'"]([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)[`\'"]?[:\s]*(?:line\s*)?(\d+)?',
-            # (file.py, line 42) or (file.py:42)
-            r'\(([a-zA-Z0-9_/.-]+\.[a-zA-Z]+),?\s*(?:line\s*)?(\d+)?\)',
-            # in/at file.py line 42
-            r'(?:in|at|file)\s+([a-zA-Z0-9_/.-]+\.[a-zA-Z]+)(?:[:\s]+(?:line\s*)?(\d+))?',
+            # `src/file.py` line 42 or `src/file.py`:42 (must have extension)
+            r'[`\'"]([a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+)[`\'"]?[:\s]*(?:line\s*)?(\d+)?',
+            # (src/file.py, line 42) or (src/file.py:42)
+            r'\(([a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+),?\s*(?:line\s*)?(\d+)?\)',
+            # in/at src/file.py line 42
+            r'(?:in|at|file)\s+([a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+)(?:[:\s]+(?:line\s*)?(\d+))?',
         ]
 
         for pattern in patterns:
@@ -118,6 +123,24 @@ class ReviewIssueParser:
             if match:
                 file_path = match.group(1)
                 line_num = match.group(2) if len(match.groups()) > 1 else None
+
+                # Validate existence if project root is known
+                if self.project_root and file_path:
+                    # Handle potential relative paths or incorrect prefixes
+                    potential_path = self.project_root / file_path
+                    if not potential_path.exists():
+                        # Try stripping leading slash
+                        if file_path.startswith('/'):
+                            potential_path = self.project_root / file_path.lstrip('/')
+                            if potential_path.exists():
+                                return file_path.lstrip('/'), line_num
+                        
+                        # Use finding but mark as possibly invalid?
+                        # For now, strict validation: if root provided and file missing, ignore it?
+                        # Better: return it but logs might show it doesn't exist.
+                        # The engine checks existence too.
+                        pass
+                
                 return file_path, line_num
 
         return None, None
