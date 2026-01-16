@@ -23,6 +23,7 @@ from .sprint import (
 from .phases import create_story, get_development_instructions, review_story
 from .phases.create import save_story
 from .phases.review import save_review, get_git_diff
+from .auto_fix import ReviewIssueParser, FixStrategyEngine, FormattingStrategy, AutoFixReport
 
 
 # Global project context
@@ -177,6 +178,25 @@ async def list_tools() -> list[Tool]:
                 "required": ["epic_number"],
             },
         ),
+        Tool(
+            name="bmad_auto_fix",
+            description="Automatically fix issues from code review. Parses the review file and applies formatting fixes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "story_key": {
+                        "type": "string",
+                        "description": "Story key to auto-fix (e.g., 0-1-homepage)",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, show what would be fixed without modifying files",
+                        "default": False,
+                    },
+                },
+                "required": ["story_key"],
+            },
+        ),
     ]
 
 
@@ -231,6 +251,11 @@ async def _handle_tool(name: str, arguments: dict) -> dict:
         )
     elif name == "bmad_run_epic":
         return await handle_run_epic(arguments["epic_number"])
+    elif name == "bmad_auto_fix":
+        return await handle_auto_fix(
+            arguments["story_key"],
+            dry_run=arguments.get("dry_run", False),
+        )
     else:
         return make_response(False, error=f"Unknown tool: {name}")
 
@@ -779,6 +804,114 @@ async def handle_run_epic(epic_number: int) -> dict:
             "plan": plan,
             "progress": f"{done_count}/{total_count} stories done",
             "is_complete": done_count == total_count,
+        },
+        next_step=next_step,
+    )
+
+
+async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
+    """Handle bmad_auto_fix - automatically fix issues from code review.
+
+    Args:
+        story_key: Story key to auto-fix
+        dry_run: If True, show what would be fixed without modifying files
+    """
+    if not validate_story_key(story_key):
+        return make_response(
+            False,
+            error=f"Invalid story key format: {story_key}. Expected N-N-slug.",
+        )
+
+    project = ctx.require_project()
+
+    # Find the review file
+    reviews_dir = project.stories_dir / "reviews"
+    review_file = reviews_dir / f"{story_key}-review.md"
+
+    if not review_file.exists():
+        return make_response(
+            False,
+            error=f"Review file not found: {review_file}. Run bmad_review_story first.",
+            next_step={
+                "action": "Run code review first",
+                "tool": "bmad_review_story",
+                "args": {"story_key": story_key},
+            },
+        )
+
+    # Parse the review
+    parser = ReviewIssueParser()
+    issues = parser.parse_file(review_file)
+
+    if not issues:
+        return make_response(
+            True,
+            data={
+                "story_key": story_key,
+                "message": "No issues found in review",
+                "fixed_count": 0,
+                "failed_count": 0,
+            },
+            next_step={
+                "action": "Story may be complete",
+                "tool": "bmad_update_status",
+                "args": {"story_key": story_key, "status": "done"},
+            },
+        )
+
+    # Set up the engine with formatting strategy
+    engine = FixStrategyEngine(project_root=project.root, dry_run=dry_run)
+    engine.register_strategy(FormattingStrategy())
+
+    # Run fixes
+    results = engine.fix_issues(issues)
+
+    # Build report
+    report = AutoFixReport(story_key=story_key, results=results)
+
+    # Determine next step based on results
+    if report.fixed_count > 0 and not dry_run:
+        next_step = {
+            "action": "Re-verify after auto-fix",
+            "tool": "bmad_verify_implementation",
+            "args": {"story_key": story_key},
+        }
+    elif report.failed_count > 0 or report.skipped_count > 0:
+        next_step = {
+            "action": "Manual fixes needed",
+            "remaining_issues": [
+                {"severity": r.issue.severity, "problem": r.issue.problem, "file": r.issue.file}
+                for r in results if r.status != "success"
+            ],
+        }
+    else:
+        next_step = {
+            "action": "No auto-fixes needed",
+            "tool": "bmad_verify_implementation",
+            "args": {"story_key": story_key},
+        }
+
+    return make_response(
+        True,
+        data={
+            "story_key": story_key,
+            "dry_run": dry_run,
+            "total_issues": report.total_issues,
+            "fixed_count": report.fixed_count,
+            "failed_count": report.failed_count,
+            "skipped_count": report.skipped_count,
+            "fix_rate": report.fix_rate,
+            "results": [
+                {
+                    "status": r.status,
+                    "severity": r.issue.severity,
+                    "problem": r.issue.problem,
+                    "file": r.issue.file,
+                    "changes": r.changes,
+                    "error": r.error_message,
+                }
+                for r in results
+            ],
         },
         next_step=next_step,
     )
