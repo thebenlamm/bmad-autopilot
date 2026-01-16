@@ -76,15 +76,11 @@ def call_llm(
                 text=True,
             )
 
-            if context:
-                try:
-                    process.stdin.write(context)
-                    process.stdin.close()
-                except BrokenPipeError:
-                    pass  # Process died early
-
             try:
-                process.wait(timeout=timeout + 10)
+                if context:
+                    process.communicate(input=context, timeout=timeout + 10)
+                else:
+                    process.communicate(timeout=timeout + 10)
             except subprocess.TimeoutExpired:
                 process.kill()
                 raise RuntimeError(f"LLM call timed out after {timeout}s")

@@ -20,7 +20,7 @@ VALID_STATUSES = {"backlog", "ready-for-dev", "in-progress", "review", "done", "
 def _sprint_lock(path: Path):
     """File lock context manager to prevent race conditions."""
     lock_path = path.parent / ".sprint-status.lock"
-    with open(lock_path, 'w') as f:
+    with open(lock_path, 'a') as f:
         try:
             fcntl.flock(f, fcntl.LOCK_EX)
             yield
@@ -33,7 +33,7 @@ def load_sprint_status(path: Path) -> dict:
     try:
         with open(path) as f:
             return yaml.safe_load(f) or {}
-    except (yaml.YAMLError, FileNotFoundError):
+    except FileNotFoundError:
         return {}
 
 

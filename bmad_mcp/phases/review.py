@@ -62,7 +62,7 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
 
     # Validate branch name to prevent command injection
     if not validate_branch_name(base_branch):
-        return f"No diff available (invalid branch name: {base_branch})"
+        raise ValueError(f"Invalid branch name: {base_branch}")
 
     # Use origin/ prefix to compare against remote (handles case where we're on the base branch)
     remote_branch = f"origin/{base_branch}"
@@ -110,7 +110,7 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
             )
 
         if stats.returncode != 0 or diff.returncode != 0:
-            return "No diff available (git command failed)"
+            raise RuntimeError("git diff failed")
 
         result = f"{stats.stdout}\n\n{diff.stdout}".strip()
         if not result or result == "\n\n":
@@ -118,8 +118,8 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
 
         return result
 
-    except Exception as e:
-        return f"No diff available: {e}"
+    except Exception:
+        raise
 
 
 """Code review phase - adversarial review using LLM."""
@@ -186,7 +186,7 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
 
     # Validate branch name to prevent command injection
     if not validate_branch_name(base_branch):
-        return f"No diff available (invalid branch name: {base_branch})"
+        raise ValueError(f"Invalid branch name: {base_branch}")
 
     # Use origin/ prefix to compare against remote (handles case where we're on the base branch)
     remote_branch = f"origin/{base_branch}"
@@ -234,7 +234,7 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
             )
 
         if stats.returncode != 0 or diff.returncode != 0:
-            return "No diff available (git command failed)"
+            raise RuntimeError("git diff failed")
 
         result = f"{stats.stdout}\n\n{diff.stdout}".strip()
         if not result or result == "\n\n":
@@ -242,8 +242,8 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
 
         return result
 
-    except Exception as e:
-        return f"No diff available: {e}"
+    except Exception:
+        raise
 
 
 def _strip_code_blocks(text: str) -> str:
@@ -330,25 +330,6 @@ def parse_review_issues(review_content: str) -> list[dict]:
                 "full_context": content[:500],
             })
 
-    # If no structured issues found, fallback only if "CRITICAL" is truly present
-    # AND it's not just "No critical issues"
-    if not issues and review_content:
-        # Simple check for fallback
-        has_critical = "CRITICAL" in review_content.upper()
-        # If the LLM said "No critical issues found", we shouldn't trigger this.
-        # But this fallback is weak. Better to rely on parsing.
-        # If we parsed nothing, and "CRITICAL" exists, it might be a false positive or a weird format.
-        # We'll leave it but give it a generic message.
-        if has_critical and "NO CRITICAL ISSUES" not in review_content.upper():
-             issues.append({
-                "severity": "CRITICAL",
-                "problem": "Potential critical issue found (unstructured) - check review text",
-                "file": None,
-                "line": None,
-                "suggested_fix": None,
-                "full_context": review_content[:500],
-            })
-
     return issues
 
 
@@ -364,7 +345,25 @@ def review_story(project: ProjectPaths, story_key: str) -> dict:
     """
     # Get git diff - this is the ONLY thing we review
     # Do NOT include story content - it causes LLM to review spec instead of code
-    diff_content = get_git_diff(project.root)
+    try:
+        diff_content = get_git_diff(project.root)
+    except Exception as e:
+        return {
+            "story_key": story_key,
+            "review": f"Review failed: {e}",
+            "has_critical_issues": True,
+            "recommendation": "in-progress",
+            "structured_issues": [
+                {
+                    "severity": "CRITICAL",
+                    "problem": f"Review failed before analysis: {e}",
+                    "file": None,
+                    "line": None,
+                    "suggested_fix": "Fix git configuration or diff generation before retrying.",
+                    "full_context": str(e),
+                }
+            ],
+        }
 
     # Context is ONLY the diff - no story content
     context = diff_content
