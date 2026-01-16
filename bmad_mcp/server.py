@@ -20,7 +20,13 @@ from .sprint import (
     update_story_status,
     VALID_STATUSES,
 )
-from .phases import create_story, get_development_instructions, review_story
+from .phases import (
+    create_story,
+    get_development_instructions,
+    get_execution_instructions,
+    plan_implementation,
+    review_story,
+)
 from .phases.create import save_story
 from .phases.review import save_review, get_git_diff
 from .auto_fix import (
@@ -117,6 +123,34 @@ async def list_tools() -> list[Tool]:
                     "story_key": {
                         "type": "string",
                         "description": "Story key to develop",
+                    },
+                },
+                "required": ["story_key"],
+            },
+        ),
+        Tool(
+            name="bmad_plan_implementation",
+            description="Generate and validate a design plan for a story before execution.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "story_key": {
+                        "type": "string",
+                        "description": "Story key to plan",
+                    },
+                },
+                "required": ["story_key"],
+            },
+        ),
+        Tool(
+            name="bmad_execute_implementation",
+            description="Get execution instructions based on a validated design plan.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "story_key": {
+                        "type": "string",
+                        "description": "Story key to execute",
                     },
                 },
                 "required": ["story_key"],
@@ -288,6 +322,10 @@ async def _handle_tool(name: str, arguments: dict) -> dict:
         return await handle_create_story(arguments["story_key"])
     elif name == "bmad_develop_story":
         return await handle_develop_story(arguments["story_key"])
+    elif name == "bmad_plan_implementation":
+        return await handle_plan_implementation(arguments["story_key"])
+    elif name == "bmad_execute_implementation":
+        return await handle_execute_implementation(arguments["story_key"])
     elif name == "bmad_verify_implementation":
         return await handle_verify_implementation(
             arguments["story_key"],
@@ -382,7 +420,7 @@ async def handle_next() -> dict:
     project = ctx.require_project()
 
     next_actions = {}
-    for phase in ["backlog", "ready-for-dev", "in-progress", "review"]:
+    for phase in ["backlog", "ready-for-dev", "planning", "executing", "in-progress", "review"]:
         stories = get_stories_by_status(project.sprint_status, phase)
         if stories:
             next_actions[phase] = stories[:3]
@@ -396,6 +434,18 @@ async def handle_next() -> dict:
             "action": "Review this story (it's blocking completion)",
             "tool": "bmad_review_story",
             "args": {"story_key": next_actions["review"][0]},
+        }
+    elif "executing" in next_actions:
+        next_step = {
+            "action": "Continue execution",
+            "tool": "bmad_execute_implementation",
+            "args": {"story_key": next_actions["executing"][0]},
+        }
+    elif "planning" in next_actions:
+        next_step = {
+            "action": "Continue planning",
+            "tool": "bmad_plan_implementation",
+            "args": {"story_key": next_actions["planning"][0]},
         }
     elif "in-progress" in next_actions:
         next_step = {
@@ -432,6 +482,10 @@ def _build_recommendations(next_actions: dict) -> list[str]:
 
     if "review" in next_actions:
         recs.append(f"Review pending: {next_actions['review'][0]} - run bmad_review_story")
+    if "executing" in next_actions:
+        recs.append(f"Continue execution: {next_actions['executing'][0]} - run bmad_execute_implementation")
+    if "planning" in next_actions:
+        recs.append(f"Continue planning: {next_actions['planning'][0]} - run bmad_plan_implementation")
     if "in-progress" in next_actions:
         recs.append(f"Continue development: {next_actions['in-progress'][0]} - run bmad_develop_story")
     if "ready-for-dev" in next_actions:
@@ -473,6 +527,46 @@ async def handle_create_story(story_key: str) -> dict:
     )
 
 
+async def handle_plan_implementation(story_key: str) -> dict:
+    """Handle bmad_plan_implementation."""
+    if not validate_story_key(story_key):
+        return make_response(
+            False,
+            error=f"Invalid story key format: {story_key}. Expected N-N-slug.",
+        )
+
+    project = ctx.require_project()
+
+    try:
+        plan_data = plan_implementation(project, story_key)
+        update_story_status(project.sprint_status, story_key, "planning")
+
+        if plan_data.get("validation_passed"):
+            next_step = {
+                "action": "Proceed to execution using the validated plan",
+                "tool": "bmad_execute_implementation",
+                "args": {"story_key": story_key},
+            }
+        else:
+            next_step = {
+                "action": "Review validation report and update the plan",
+                "tool": "bmad_plan_implementation",
+                "args": {"story_key": story_key},
+                "note": "Plan validation failed; fix the plan before execution.",
+            }
+
+        return make_response(
+            True,
+            data={
+                **plan_data,
+                "status": "planning",
+            },
+            next_step=next_step,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        return make_response(False, error=str(exc))
+
+
 async def handle_develop_story(story_key: str) -> dict:
     """Handle bmad_develop_story."""
     if not validate_story_key(story_key):
@@ -485,7 +579,24 @@ async def handle_develop_story(story_key: str) -> dict:
 
     try:
         instructions = get_development_instructions(project, story_key)
-        update_story_status(project.sprint_status, story_key, "in-progress")
+
+        validation_ok = instructions.get("validation_passed", True)
+        if not validation_ok:
+            update_story_status(project.sprint_status, story_key, "planning")
+            return make_response(
+                True,
+                data={
+                    **instructions,
+                    "status": "planning",
+                },
+                next_step={
+                    "action": "Fix the design plan and re-run planning",
+                    "tool": "bmad_plan_implementation",
+                    "args": {"story_key": story_key},
+                },
+            )
+
+        update_story_status(project.sprint_status, story_key, "executing")
 
         # Count incomplete tasks
         incomplete_tasks = [t for t in instructions.get("tasks", []) if not t.get("completed")]
@@ -494,14 +605,14 @@ async def handle_develop_story(story_key: str) -> dict:
             True,
             data={
                 **instructions,
-                "status": "in-progress",
+                "status": "executing",
                 "incomplete_task_count": len(incomplete_tasks),
             },
             next_step={
                 "action": "IMPLEMENT THE CODE NOW",
                 "instructions": [
-                    "1. Read the story_content and tasks above",
-                    "2. Write code to implement EACH task in the target project",
+                    "1. Read the design_plan and tasks above",
+                    "2. Implement EACH task using the design plan",
                     "3. Check off tasks in the story file as you complete them (change [ ] to [x])",
                     "4. Run tests manually to verify your implementation",
                     "5. When done, call bmad_verify_implementation to check your work",
@@ -514,8 +625,52 @@ async def handle_develop_story(story_key: str) -> dict:
                 "warning": "Do NOT just read this and move on - you must WRITE CODE!",
             },
         )
-    except FileNotFoundError as e:
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
         return make_response(False, error=str(e))
+
+
+async def handle_execute_implementation(story_key: str) -> dict:
+    """Handle bmad_execute_implementation."""
+    if not validate_story_key(story_key):
+        return make_response(
+            False,
+            error=f"Invalid story key format: {story_key}. Expected N-N-slug.",
+        )
+
+    project = ctx.require_project()
+
+    try:
+        instructions = get_execution_instructions(project, story_key)
+        update_story_status(project.sprint_status, story_key, "executing")
+
+        incomplete_tasks = [t for t in instructions.get("tasks", []) if not t.get("completed")]
+
+        return make_response(
+            True,
+            data={
+                **instructions,
+                "status": "executing",
+                "incomplete_task_count": len(incomplete_tasks),
+            },
+            next_step={
+                "action": "IMPLEMENT THE CODE NOW",
+                "instructions": [
+                    "1. Read the design_plan and tasks above",
+                    "2. Implement EACH task using the design plan",
+                    "3. Check off tasks in the story file as you complete them (change [ ] to [x])",
+                    "4. Run tests manually to verify your implementation",
+                    "5. When done, call bmad_verify_implementation to check your work",
+                    "   (add run_tests=true if you trust the project's test suite)",
+                ],
+                "then": {
+                    "tool": "bmad_verify_implementation",
+                    "args": {"story_key": story_key},
+                },
+                "warning": "Do NOT just read this and move on - you must WRITE CODE!",
+            },
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        return make_response(False, error=str(exc))
 
 
 async def handle_verify_implementation(story_key: str, run_tests: bool = False) -> dict:
@@ -783,6 +938,18 @@ async def handle_update_status(story_key: str, status: str) -> dict:
             "action": "Check for more work",
             "tool": "bmad_next",
         }
+    elif status == "planning":
+        next_step = {
+            "action": "Continue planning",
+            "tool": "bmad_plan_implementation",
+            "args": {"story_key": story_key},
+        }
+    elif status == "executing":
+        next_step = {
+            "action": "Continue execution",
+            "tool": "bmad_execute_implementation",
+            "args": {"story_key": story_key},
+        }
     elif status == "in-progress":
         next_step = {
             "action": "Continue implementation",
@@ -832,6 +999,20 @@ async def handle_run_epic(epic_number: int) -> dict:
             "action": "develop",
             "story_key": key,
             "tool": "bmad_develop_story",
+        })
+
+    for key in by_status.get("planning", []):
+        plan.append({
+            "action": "plan",
+            "story_key": key,
+            "tool": "bmad_plan_implementation",
+        })
+
+    for key in by_status.get("executing", []):
+        plan.append({
+            "action": "execute",
+            "story_key": key,
+            "tool": "bmad_execute_implementation",
         })
 
     for key in by_status.get("in-progress", []):

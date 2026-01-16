@@ -299,23 +299,71 @@ SYSTEM_EOF
     return 0
 }
 
-# Phase 2: Develop Story
-develop_story() {
+# Phase 2A: Plan Story
+plan_story() {
     local story_key="$1"
-    local story_file="$STORIES_DIR/${story_key}.md"
 
-    log_phase "PHASE 2: DEVELOP STORY ($story_key)"
+    log_phase "PHASE 2A: PLAN STORY ($story_key)"
 
     if ! validate_story_key "$story_key"; then
         return 1
     fi
 
+    log "Model: $CLAUDE_MODEL"
+
+    local python_cmd="python3"
+    if [[ -f ".venv/bin/python" ]]; then
+        python_cmd="./.venv/bin/python"
+    fi
+
+    if $python_cmd - <<PY
+import sys
+from bmad_mcp.project import ProjectContext
+from bmad_mcp.phases.plan import plan_implementation
+
+ctx = ProjectContext()
+project = ctx.set_project("$PROJECT_ROOT")
+data = plan_implementation(project, "$story_key")
+print(f"✓ Design plan: {data['design_plan_file']}")
+print(f"✓ Validation report: {data['validation_report_file']}")
+print(f"✓ Validation passed: {data['validation_passed']}")
+sys.exit(0 if data["validation_passed"] else 1)
+PY
+    then
+        update_status "$story_key" "planning"
+        return 0
+    else
+        update_status "$story_key" "planning"
+        log "${RED}✗ Plan validation failed. Fix the design plan before executing.${NC}"
+        return 1
+    fi
+}
+
+# Phase 2B: Execute Story
+execute_story() {
+    local story_key="$1"
+    local story_file="$STORIES_DIR/${story_key}.md"
+    local plan_file="$STORIES_DIR/${story_key}/design-plan.md"
+
+    log_phase "PHASE 2B: EXECUTE STORY ($story_key)"
+
+    if ! validate_story_key "$story_key"; then
+        return 1
+    fi
+
+    if [[ ! -f "$plan_file" ]]; then
+        log "${RED}Error: Design plan not found: $plan_file${NC}"
+        return 1
+    fi
+
     log "Model: $AIDER_MODEL (or agentic tool)"
+    update_status "$story_key" "executing"
 
     if command -v aider &> /dev/null; then
         log "Using Aider for development..."
 
         local dev_prompt="Implement ALL tasks and subtasks in the story file.
+Use the design plan in $plan_file as the primary guide.
 Check off each task as you complete it.
 Run tests to verify acceptance criteria.
 When complete, the story status will be updated to 'review'."
@@ -365,6 +413,7 @@ When complete, the story status will be updated to 'review'."
         if $YOLO_MODE; then
             log "${RED}⚠ YOLO MODE: Auto-accepting all changes without review${NC}"
             aider --model "$AIDER_MODEL" \
+                  --read "$plan_file" \
                   --read "$story_file" \
                   "${golden_files[@]}" \
                   --map-tokens 2048 \
@@ -389,6 +438,7 @@ When complete, the story status will be updated to 'review'."
             log "${YELLOW}NOTE: Aider requires interactive terminal for confirmations${NC}"
             log "${YELLOW}Use --yolo flag for fully unattended mode (accepts all changes)${NC}"
             aider --model "$AIDER_MODEL" \
+                  --read "$plan_file" \
                   --read "$story_file" \
                   "${golden_files[@]}" \
                   --map-tokens 2048 \
@@ -441,9 +491,13 @@ When complete, the story status will be updated to 'review'."
 Please implement the story in: $story_file
 
 Read the story file and implement ALL tasks and subtasks listed.
+Use the design plan below as the primary guide.
 Check off each task as you complete it.
 Run tests to verify acceptance criteria are met.
 When complete, update the sprint-status.yaml to set $story_key to 'review'.
+
+Design plan:
+$(cat "$plan_file")
 
 Begin implementation now.
 EOF
@@ -498,6 +552,15 @@ EOF
     fi
 
     log "${GREEN}✓ Development phase complete${NC}"
+}
+
+# Phase 2: Develop Story (plan + execute)
+develop_story() {
+    local story_key="$1"
+    if ! plan_story "$story_key"; then
+        return 1
+    fi
+    execute_story "$story_key"
 }
 
 # Phase 3: Code Review
@@ -638,32 +701,6 @@ run_autopilot() {
         ((iteration++))
         log "\n--- Iteration $iteration ---"
 
-        # Check for backlog stories to create
-        local backlog_story=$(get_next_story "backlog")
-        if [[ -n "$backlog_story" ]]; then
-            if [[ -n "$target_epic" ]] && [[ ! "$backlog_story" =~ ^$target_epic- ]]; then
-                backlog_story=""
-            fi
-        fi
-
-        if [[ -n "$backlog_story" ]]; then
-            create_story "$backlog_story"
-            continue
-        fi
-
-        # Check for ready-for-dev stories
-        local ready_story=$(get_next_story "ready-for-dev")
-        if [[ -n "$ready_story" ]]; then
-            if [[ -n "$target_epic" ]] && [[ ! "$ready_story" =~ ^$target_epic- ]]; then
-                ready_story=""
-            fi
-        fi
-
-        if [[ -n "$ready_story" ]]; then
-            develop_story "$ready_story"
-            continue
-        fi
-
         # Check for stories needing review
         local review_story=$(get_next_story "review")
         if [[ -n "$review_story" ]]; then
@@ -699,6 +736,32 @@ run_autopilot() {
             continue
         fi
 
+        # Check for executing stories
+        local executing_story=$(get_next_story "executing")
+        if [[ -n "$executing_story" ]]; then
+            if [[ -n "$target_epic" ]] && [[ ! "$executing_story" =~ ^$target_epic- ]]; then
+                executing_story=""
+            fi
+        fi
+
+        if [[ -n "$executing_story" ]]; then
+            execute_story "$executing_story"
+            continue
+        fi
+
+        # Check for planning stories
+        local planning_story=$(get_next_story "planning")
+        if [[ -n "$planning_story" ]]; then
+            if [[ -n "$target_epic" ]] && [[ ! "$planning_story" =~ ^$target_epic- ]]; then
+                planning_story=""
+            fi
+        fi
+
+        if [[ -n "$planning_story" ]]; then
+            plan_story "$planning_story"
+            continue
+        fi
+
         # Check for in-progress stories (resume development)
         local inprogress_story=$(get_next_story "in-progress")
         if [[ -n "$inprogress_story" ]]; then
@@ -709,6 +772,32 @@ run_autopilot() {
 
         if [[ -n "$inprogress_story" ]]; then
             develop_story "$inprogress_story"
+            continue
+        fi
+
+        # Check for ready-for-dev stories
+        local ready_story=$(get_next_story "ready-for-dev")
+        if [[ -n "$ready_story" ]]; then
+            if [[ -n "$target_epic" ]] && [[ ! "$ready_story" =~ ^$target_epic- ]]; then
+                ready_story=""
+            fi
+        fi
+
+        if [[ -n "$ready_story" ]]; then
+            develop_story "$ready_story"
+            continue
+        fi
+
+        # Check for backlog stories to create
+        local backlog_story=$(get_next_story "backlog")
+        if [[ -n "$backlog_story" ]]; then
+            if [[ -n "$target_epic" ]] && [[ ! "$backlog_story" =~ ^$target_epic- ]]; then
+                backlog_story=""
+            fi
+        fi
+
+        if [[ -n "$backlog_story" ]]; then
+            create_story "$backlog_story"
             continue
         fi
 

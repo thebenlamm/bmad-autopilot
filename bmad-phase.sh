@@ -2,7 +2,7 @@
 # BMAD Phase Runner - Run a single phase manually
 # Usage: bmad-phase <phase> [story-key] [--project /path/to/project]
 #
-# Phases: create, develop, review, status, next
+# Phases: create, plan, execute, develop, review, status, next, index, reindex
 
 set -euo pipefail
 
@@ -160,19 +160,64 @@ SYSTEM_EOF
     rm -f "$context_file" "$system_file" "$prompt_file"
 }
 
-# Phase: Develop story
-do_develop() {
+# Phase: Plan story
+do_plan() {
     local story_key="$1"
     validate_story_key "$story_key"
 
-    echo -e "${BLUE}DEVELOP phase for: $story_key${NC}"
+    echo -e "${BLUE}PLAN phase for: $story_key${NC}"
+    echo "Using model: $CLAUDE_MODEL"
+    echo "Timeout: ${LLM_TIMEOUT}s"
+
+    local python_cmd="python3"
+    if [[ -f ".venv/bin/python" ]]; then
+        python_cmd="./.venv/bin/python"
+    fi
+
+    if $python_cmd - <<PY
+import sys
+from bmad_mcp.project import ProjectContext
+from bmad_mcp.phases.plan import plan_implementation
+
+ctx = ProjectContext()
+project = ctx.set_project("$PROJECT_ROOT")
+data = plan_implementation(project, "$story_key")
+print(f"✓ Design plan: {data['design_plan_file']}")
+print(f"✓ Validation report: {data['validation_report_file']}")
+print(f"✓ Validation passed: {data['validation_passed']}")
+sys.exit(0 if data["validation_passed"] else 1)
+PY
+    then
+        update_status "$story_key" "planning"
+        return 0
+    else
+        update_status "$story_key" "planning"
+        echo -e "${RED}✗ Plan validation failed. Fix the design plan before executing.${NC}"
+        return 1
+    fi
+}
+
+# Phase: Execute story
+do_execute() {
+    local story_key="$1"
+    validate_story_key "$story_key"
+
+    echo -e "${BLUE}EXECUTE phase for: $story_key${NC}"
 
     local story_file="$STORIES_DIR/${story_key}.md"
+    local plan_file="$STORIES_DIR/${story_key}/design-plan.md"
+
+    if [[ ! -f "$plan_file" ]]; then
+        echo -e "${RED}Error: Design plan not found: $plan_file${NC}"
+        exit 1
+    fi
 
     if [[ ! -f "$story_file" ]]; then
         echo -e "${RED}Error: Story file not found: $story_file${NC}"
         exit 1
     fi
+
+    update_status "$story_key" "executing"
 
     # Check if running in non-interactive mode
     local is_interactive=true
@@ -191,13 +236,14 @@ do_develop() {
 
         cd "$PROJECT_ROOT"
         aider --model "$AIDER_MODEL" \
-              --message "Implement the story in $story_file. Check off tasks as you complete them." \
+              --read "$plan_file" \
+              --message "Implement the story in $story_file using the design plan in $plan_file. Check off tasks as you complete them." \
               --no-auto-commits \
               --no-show-model-warnings
     elif command -v claude &> /dev/null; then
         echo "Using Claude Code..."
         cd "$PROJECT_ROOT"
-        claude --print "Implement the story in $story_file. Check off tasks as you complete them."
+        claude --print "Implement the story in $story_file using the design plan in $plan_file. Check off tasks as you complete them."
     else
         echo -e "${YELLOW}No agentic tool found.${NC}"
         echo "Install one of:"
@@ -205,6 +251,15 @@ do_develop() {
         echo "  https://claude.ai/code"
         exit 1
     fi
+}
+
+# Phase: Develop story (plan + execute)
+do_develop() {
+    local story_key="$1"
+    validate_story_key "$story_key"
+
+    do_plan "$story_key"
+    do_execute "$story_key"
 }
 
 # Phase: Review story
@@ -310,6 +365,40 @@ do_next() {
     echo "  $done_count stories completed"
 }
 
+# Phase: Index project
+do_index() {
+    local force="${1:-false}"
+    echo -e "${BLUE}INDEX phase${NC}"
+    
+    local python_cmd="python3"
+    if [[ -f "./.venv/bin/python" ]]; then
+        python_cmd="./.venv/bin/python"
+    fi
+
+    echo "Indexing codebase in $PROJECT_ROOT..."
+    $python_cmd -c "
+import sys
+from pathlib import Path
+from bmad_mcp.context import ContextIndexer
+try:
+    indexer = ContextIndexer(Path('$PROJECT_ROOT'))
+    stats = indexer.index(force=('$force' == 'true'))
+    print(f\"✓ Indexed {stats['files_indexed']} files, {stats['symbols_indexed']} symbols\")
+    print(f\"✓ Type: {stats['type']}\")
+    if 'changed' in stats:
+        c = stats['changed']
+        print(f\"  Modified: {len(c['modified'])}, Added: {len(c['added'])}, Deleted: {len(c['deleted'])}\")
+except Exception as e:
+    print(f\"Error during indexing: {e}\")
+    sys.exit(1)
+"
+}
+
+# Phase: Reindex project
+do_reindex() {
+    do_index "true"
+}
+
 # Show help
 show_help() {
     echo "BMAD Phase Runner - Run single phases manually"
@@ -318,10 +407,14 @@ show_help() {
     echo ""
     echo "Phases:"
     echo "  create <key>   Create story file from epics"
+    echo "  plan <key>     Generate and validate design plan"
+    echo "  execute <key>  Implement story using design plan"
     echo "  develop <key>  Implement story (aider/claude)"
     echo "  review <key>   Adversarial code review"
     echo "  status         Show sprint status"
     echo "  next           Show next actionable stories"
+    echo "  index          Index project for context retrieval"
+    echo "  reindex        Force rebuild of context index"
     echo ""
     echo "Options:"
     echo "  --project, -p PATH  Project root (default: current directory)"
@@ -358,7 +451,7 @@ main() {
                 show_help
                 exit 0
                 ;;
-            create|develop|review|status|next)
+            create|plan|execute|develop|review|status|next|index|reindex)
                 phase="$1"
                 shift
                 ;;
@@ -397,6 +490,14 @@ main() {
             [[ -z "$story_key" ]] && { echo -e "${RED}Error: story-key required${NC}"; exit 1; }
             do_create "$story_key"
             ;;
+        plan)
+            [[ -z "$story_key" ]] && { echo -e "${RED}Error: story-key required${NC}"; exit 1; }
+            do_plan "$story_key"
+            ;;
+        execute)
+            [[ -z "$story_key" ]] && { echo -e "${RED}Error: story-key required${NC}"; exit 1; }
+            do_execute "$story_key"
+            ;;
         develop)
             [[ -z "$story_key" ]] && { echo -e "${RED}Error: story-key required${NC}"; exit 1; }
             do_develop "$story_key"
@@ -410,6 +511,12 @@ main() {
             ;;
         next)
             do_next
+            ;;
+        index)
+            do_index
+            ;;
+        reindex)
+            do_reindex
             ;;
     esac
 }

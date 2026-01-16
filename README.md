@@ -79,6 +79,29 @@ claude mcp list
 | `bmad_review_story` | Run adversarial code review |
 | `bmad_update_status` | Update story status |
 | `bmad_run_epic` | Get orchestration plan for epic |
+| `bmad_index_project` | Index codebase for context retrieval |
+| `bmad_reindex` | Force rebuild of context index |
+| `bmad_search_context` | Search indexed code manually |
+
+### Dynamic Context Retrieval (RAG)
+
+BMAD Autopilot automatically retrieves relevant existing code during the development phase to ensure consistency with existing patterns.
+
+- **Automatic Indexing**: Codebase is indexed on first setup and refreshed automatically when stale.
+- **Multi-Language Support**: Supports Python (AST), JS, TS, Go, Java, and Ruby (Regex).
+- **Incremental Updates**: Only modified files are re-parsed during index refreshes.
+- **Reference Implementation**: Relevant code snippets are injected directly into the development instructions.
+
+#### Configuration (.bmad/config.yaml)
+
+```yaml
+context:
+  enabled: true
+  file_patterns: ["**/*.py", "**/*.js", "**/*.ts"]
+  ignore_patterns: ["**/node_modules/**", "**/venv/**"]
+  max_results: 5
+  staleness_threshold: 3600
+```
 
 ### Example Workflow
 
@@ -135,6 +158,12 @@ bmad-phase develop 0-1-homepage
 
 # Run adversarial code review
 bmad-phase review 0-1-homepage
+
+# Index project for context retrieval
+bmad-phase index
+
+# Force rebuild of index
+bmad-phase reindex
 
 # Specify project
 bmad-phase status --project ~/myproject

@@ -11,9 +11,27 @@ from typing import Literal
 import yaml
 
 
-Status = Literal["backlog", "ready-for-dev", "in-progress", "review", "done", "blocked"]
+Status = Literal[
+    "backlog",
+    "ready-for-dev",
+    "planning",
+    "executing",
+    "in-progress",
+    "review",
+    "done",
+    "blocked",
+]
 
-VALID_STATUSES = {"backlog", "ready-for-dev", "in-progress", "review", "done", "blocked"}
+VALID_STATUSES = {
+    "backlog",
+    "ready-for-dev",
+    "planning",
+    "executing",
+    "in-progress",
+    "review",
+    "done",
+    "blocked",
+}
 
 
 @contextlib.contextmanager

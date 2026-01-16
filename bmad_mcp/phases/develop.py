@@ -1,103 +1,36 @@
-"""Development phase - returns implementation instructions for Claude to execute."""
-
-from pathlib import Path
+"""Development phase - orchestrates planning + execution."""
 
 from ..project import ProjectPaths
-from ..context import ContextRetriever
+from .plan import plan_implementation
+from .execute import get_execution_instructions
 
 
 def get_development_instructions(project: ProjectPaths, story_key: str) -> dict:
     """Get development instructions for a story.
 
-    Instead of shelling to aider/claude, this returns the story content
-    with structured instructions for the calling Claude to implement directly.
-    Includes relevant code context from existing implementation.
-
-    Args:
-        project: Project paths
-        story_key: Story key (e.g., "0-1-homepage")
-
-    Returns:
-        Dictionary with story content and implementation guidance
+    Runs the planning phase first. If validation passes, returns execution
+    instructions that embed the design plan. If validation fails, returns
+    planning outputs so the user can revise the plan.
     """
-    story_file = project.stories_dir / f"{story_key}.md"
+    plan_data = plan_implementation(project, story_key)
+    if not plan_data.get("validation_passed"):
+        plan_data["instructions"] = _build_plan_fix_instructions(story_key, plan_data)
+        return plan_data
 
-    if not story_file.exists():
-        raise FileNotFoundError(f"Story file not found: {story_file}")
-
-    story_content = story_file.read_text()
-
-    # Parse tasks from story (look for checkboxes)
-    tasks = _extract_tasks(story_content)
-
-    # Retrieve context
-    retriever = ContextRetriever(project.root)
-    context_section = ""
-    try:
-        context_section = retriever.retrieve_formatted(story_content)
-    except Exception as e:
-        # Don't fail dev phase if context retrieval fails
-        context_section = f"<!-- Context retrieval failed: {e} -->"
-
+    execution_data = get_execution_instructions(project, story_key)
     return {
-        "story_key": story_key,
-        "story_file": str(story_file),
-        "story_content": story_content,
-        "tasks": tasks,
-        "context": context_section,
-        "instructions": _build_instructions(story_key, project, context_section),
+        **plan_data,
+        **execution_data,
     }
 
 
-def _extract_tasks(content: str) -> list[dict]:
-    """Extract tasks from story markdown.
-
-    Looks for checkbox items like:
-    - [ ] Task description
-    - [x] Completed task
-    """
-    import re
-
-    tasks = []
-    pattern = r'^(\s*)-\s*\[([ xX])\]\s*(.+)$'
-
-    for match in re.finditer(pattern, content, re.MULTILINE):
-        indent = len(match.group(1))
-        completed = match.group(2).lower() == 'x'
-        description = match.group(3).strip()
-
-        tasks.append({
-            "description": description,
-            "completed": completed,
-            "indent": indent,
-            "is_subtask": indent > 0,
-        })
-
-    return tasks
-
-
-def _build_instructions(story_key: str, project: ProjectPaths, context: str = "") -> str:
-    """Build implementation instructions."""
-    return f"""## Implementation Instructions
-
-1. Read the story content above carefully
-2. Implement ALL tasks and subtasks in order
-3. After completing each task, update the story file to check it off:
-   - Change `- [ ]` to `- [x]`
-4. Run tests to verify acceptance criteria
-5. When all tasks are complete, update the story status:
-   - Use bmad_update_status("{story_key}", "review")
-
-{context}
-
-## Project Context
-
-- Project root: {project.root}
-- Sprint status: {project.sprint_status}
-
-## Tips
-
-- Follow existing code patterns in the project (see Reference Implementation above)
-- Write tests for new functionality
-- Commit logical chunks of work
-"""
+def _build_plan_fix_instructions(story_key: str, plan_data: dict) -> str:
+    """Build instructions when validation fails."""
+    return (
+        "## Planning Instructions\n\n"
+        "The design plan validation failed. Review the validation report, revise the "
+        "design plan, and re-run bmad_plan_implementation before executing.\n\n"
+        f"Design plan file: {plan_data.get('design_plan_file')}\n"
+        f"Validation report: {plan_data.get('validation_report_file')}\n"
+        f"Story key: {story_key}\n"
+    )
