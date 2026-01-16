@@ -23,7 +23,16 @@ from .sprint import (
 from .phases import create_story, get_development_instructions, review_story
 from .phases.create import save_story
 from .phases.review import save_review, get_git_diff
-from .auto_fix import ReviewIssueParser, FixStrategyEngine, FormattingStrategy, AutoFixReport
+from .auto_fix import (
+    ReviewIssueParser, 
+    FixStrategyEngine, 
+    FormattingStrategy, 
+    AutoFixReport
+)
+from .auto_fix.modifier import CodeModifier
+from .auto_fix.safety import SafetyGuard
+from .auto_fix.reporter import ReportGenerator
+from .auto_fix.validator import ValidationOrchestrator
 from .context import ContextIndexer
 
 
@@ -213,6 +222,14 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="bmad_reindex",
+            description="Force rebuild of the context index. Equivalent to bmad_index_project with force=true.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
             name="bmad_search_context",
             description="Search indexed code for relevant implementations. Returns matching functions/classes with code snippets.",
             inputSchema={
@@ -294,6 +311,8 @@ async def _handle_tool(name: str, arguments: dict) -> dict:
         return await handle_index_project(
             force=arguments.get("force", False),
         )
+    elif name == "bmad_reindex":
+        return await handle_index_project(force=True)
     elif name == "bmad_search_context":
         return await handle_search_context(
             arguments["query"],
@@ -309,6 +328,16 @@ async def handle_set_project(project_path: str) -> dict:
         paths = ctx.set_project(project_path)
         summary = get_status_summary(paths.sprint_status)
 
+        # Auto-index if needed
+        indexer = ContextIndexer(project_root=paths.root)
+        indexing_msg = ""
+        if not indexer.is_indexed():
+            stats = indexer.index()
+            indexing_msg = f" (Auto-indexed {stats['files_indexed']} files)"
+        elif indexer.is_stale():
+            stats = indexer.index() # Refresh
+            indexing_msg = f" (Refreshed index: {stats['files_indexed']} files)"
+
         return make_response(
             True,
             data={
@@ -317,6 +346,7 @@ async def handle_set_project(project_path: str) -> dict:
                 "epics_file": str(paths.epics_file),
                 "stories_dir": str(paths.stories_dir),
                 "status_summary": summary,
+                "indexing_status": indexing_msg.strip(" ()"),
             },
             next_step={
                 "action": "Check what needs to be done",
@@ -859,7 +889,7 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
         story_key: Story key to auto-fix
         dry_run: If True, show what would be fixed without modifying files
     """
-    if not validate_story_key(story_key):
+    if not validate_story_key(story_key) or "/" in story_key or "\\" in story_key or ".." in story_key:
         return make_response(
             False,
             error=f"Invalid story key format: {story_key}. Expected N-N-slug.",
@@ -867,28 +897,22 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
 
     project = ctx.require_project()
 
+    # Load configuration
+    from .auto_fix.config import load_config, StrategyConfig
+    config = load_config(project.root)
+
     # Safety Check: Ensure clean git state before applying fixes
-    if not dry_run:
-        try:
-            status_output = subprocess.check_output(
-                ["git", "status", "--porcelain"],
-                cwd=project.root,
-                text=True,
-                timeout=5
-            )
-            if status_output.strip():
-                return make_response(
-                    False,
-                    error="Working directory is not clean. Commit or stash changes before running auto-fix to prevent data loss.",
-                    next_step={
-                        "action": "Check git status",
-                        "tool": "run_shell_command",
-                        "args": {"command": "git status"},
-                    },
-                )
-        except (subprocess.SubprocessError, FileNotFoundError):
-            # If not a git repo or git missing, we proceed with caution (or could fail)
-            pass
+    safety = SafetyGuard(project.root)
+    if not dry_run and config.require_clean_git and not safety.check_git_status():
+        return make_response(
+            False,
+            error="Working directory is not clean. Commit or stash changes before running auto-fix to prevent data loss.",
+            next_step={
+                "action": "Check git status",
+                "tool": "run_shell_command",
+                "args": {"command": "git status"},
+            },
+        )
 
     # Find the review file
     reviews_dir = project.stories_dir / "reviews"
@@ -927,20 +951,49 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
 
     # Set up the engine with formatting strategy
     engine = FixStrategyEngine(project_root=project.root, dry_run=dry_run)
-    engine.register_strategy(FormattingStrategy())
+    
+    if config.strategies.get("formatting", StrategyConfig()).enabled:
+        engine.register_strategy(FormattingStrategy())
+        
+    # TODO: Register other strategies when implemented
+    # if config.strategies.get("imports", StrategyConfig()).enabled:
+    #     engine.register_strategy(ImportStrategy())
 
     # Run fixes
     results = engine.fix_issues(issues)
 
     # Build report
     report = AutoFixReport(story_key=story_key, results=results)
+    
+    # Validation (Re-run tests)
+    validation_passed = None
+    if not dry_run and report.fixed_count > 0:
+        validator = ValidationOrchestrator(project.root)
+        validation_passed = validator.run_tests()
+
+    # Generate Markdown Report
+    reporter = ReportGenerator()
+    report_file = reporter.save_report(report, reviews_dir)
 
     # Determine next step based on results
-    if (report.fixed_count > 0 or report.dry_run_count > 0) and not dry_run:
+    next_step = None
+    if dry_run:
         next_step = {
-            "action": "Re-verify after auto-fix",
-            "tool": "bmad_verify_implementation",
-            "args": {"story_key": story_key},
+            "action": "Review planned fixes and run with dry_run=False",
+            "tool": "bmad_auto_fix",
+            "args": {"story_key": story_key, "dry_run": False},
+        }
+    elif validation_passed:
+        next_step = {
+            "action": "Fixes verified! Review report and complete story.",
+            "tool": "bmad_update_status",
+            "args": {"story_key": story_key, "status": "done"},
+        }
+    elif validation_passed is False:
+        next_step = {
+            "action": "Fixes applied but tests failed. Check report.",
+            "tool": "run_shell_command",
+            "args": {"command": f"cat {report_file}"},
         }
     elif report.failed_count > 0 or report.skipped_count > 0:
         next_step = {
@@ -962,12 +1015,12 @@ async def handle_auto_fix(story_key: str, dry_run: bool = False) -> dict:
         data={
             "story_key": story_key,
             "dry_run": dry_run,
+            "report_file": str(report_file),
             "total_issues": report.total_issues,
             "fixed_count": report.fixed_count,
             "dry_run_count": report.dry_run_count,
             "failed_count": report.failed_count,
-            "skipped_count": report.skipped_count,
-            "fix_rate": report.fix_rate,
+            "validation_passed": validation_passed,
             "results": [
                 {
                     "status": r.status,

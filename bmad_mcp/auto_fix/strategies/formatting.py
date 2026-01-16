@@ -1,6 +1,7 @@
 """Formatting fix strategy using black and isort."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 from ..models import Issue, FixResult
@@ -50,21 +51,37 @@ class FormattingStrategy(FixStrategy):
 
         return any(keyword in combined for keyword in FORMATTING_KEYWORDS)
 
-    def apply_fix(self, issue: Issue, project_root: Path, dry_run: bool = False) -> FixResult:
+    def apply_fix(self, issue: Issue, project_root: Path, dry_run: bool = False, code_modifier=None) -> FixResult:
         """Apply formatting fix using black.
 
         Args:
             issue: The issue to fix
-            project_root: Project root directory
+            project_root: Root directory of the project
             dry_run: If True, don't actually modify files
+            code_modifier: Optional CodeModifier for backups
 
         Returns:
             FixResult indicating success/failure
         """
-        # Resolve file path
-        file_path = Path(issue.file)
-        if not file_path.is_absolute():
-            file_path = project_root / file_path
+        # Resolve file path and validate (CRITICAL-1)
+        try:
+            if code_modifier:
+                file_path = code_modifier.validate_path(Path(issue.file))
+            else:
+                file_path = Path(issue.file)
+                if not file_path.is_absolute():
+                    file_path = (project_root / file_path).resolve()
+                
+                # Manual validation if no modifier
+                if not str(file_path).startswith(str(project_root.resolve())):
+                    raise PermissionError(f"Path traversal blocked: {issue.file}")
+        except Exception as e:
+            return FixResult(
+                issue=issue,
+                status="failed",
+                changes=[],
+                error_message=str(e),
+            )
 
         # Check file exists
         if not file_path.exists():
@@ -83,7 +100,7 @@ class FormattingStrategy(FixStrategy):
             # Use black --check to see if file would change
             try:
                 result = subprocess.run(
-                    ["black", "--check", str(file_path)],
+                    [sys.executable, "-m", "black", "--check", str(file_path)],
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -111,10 +128,22 @@ class FormattingStrategy(FixStrategy):
                     error_message="black not installed",
                 )
 
+        # Create backup if possible
+        if code_modifier:
+            try:
+                code_modifier.backup_manager.create_backup(file_path)
+            except Exception as e:
+                return FixResult(
+                    issue=issue,
+                    status="failed",
+                    changes=[],
+                    error_message=f"Backup failed: {e}",
+                )
+
         # Run black
         try:
             result = subprocess.run(
-                ["black", str(file_path)],
+                [sys.executable, "-m", "black", str(file_path)],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -149,29 +178,15 @@ class FormattingStrategy(FixStrategy):
         # Run isort for import ordering
         try:
             result = subprocess.run(
-                ["isort", str(file_path)],
+                [sys.executable, "-m", "isort", str(file_path)],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
             if result.returncode == 0:
-                # Need to read content to check if changed since isort doesn't always output "fixed"
-                current_content = file_path.read_text()
-                # Compare with content AFTER black (but we didn't read it)
-                # So we just check if it differs from what it was before ISORT?
-                # We didn't save intermediate state.
-                # Simplest: check if content changed from original, and we haven't logged it yet?
-                # Or just assume if returncode 0 it worked.
-                # Isort usually prints to stdout/stderr if it changed things?
                 if "Fixing" in result.stdout or "Fixing" in result.stderr:
                      changes.append(f"Sorted imports in {file_path.name} with isort")
-                elif file_path.read_text() != original_content and not changes:
-                     # This logic is tricky if black changed it.
-                     # Let's rely on final validation.
-                     pass
-                     
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            # isort is optional, ignore failures
             pass
 
         # Validate the fix
@@ -179,8 +194,20 @@ class FormattingStrategy(FixStrategy):
         
         # Check AST equivalence to ensure no logic changes
         if not self.validate_ast_equivalence(original_content, new_content):
-            # Rollback
-            file_path.write_text(original_content)
+            # Rollback with error handling (HIGH-4)
+            try:
+                if code_modifier:
+                    code_modifier.rollback(file_path)
+                else:
+                    file_path.write_text(original_content)
+            except Exception as rollback_err:
+                return FixResult(
+                    issue=issue,
+                    status="failed",
+                    changes=[],
+                    error_message=f"CRITICAL: Fix validation failed AND rollback failed: {rollback_err}",
+                )
+                
             return FixResult(
                 issue=issue,
                 status="failed",
@@ -190,9 +217,6 @@ class FormattingStrategy(FixStrategy):
             
         # Basic validation (syntax check)
         if not self.validate_fix(issue, original_content, new_content):
-            # If validate_fix fails but AST was same, it means content didn't change
-            # or syntax error (already caught by AST check).
-            # So this mostly checks "did content change?"
             if original_content == new_content:
                  return FixResult(
                     issue=issue,
@@ -200,7 +224,6 @@ class FormattingStrategy(FixStrategy):
                     changes=[],
                     error_message="No formatting changes needed",
                 )
-            # If changed but invalid syntax, AST check would have caught it.
             
         if changes or original_content != new_content:
             if not changes:

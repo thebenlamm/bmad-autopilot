@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .models import Issue, FixResult
 from .strategies.base import FixStrategy
+from .modifier import CodeModifier
 
 
 class FixStrategyEngine:
@@ -23,6 +24,7 @@ class FixStrategyEngine:
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.dry_run = dry_run
         self.strategies: list[FixStrategy] = []
+        self.code_modifier = CodeModifier(self.project_root) if not dry_run else None
 
     def register_strategy(self, strategy: FixStrategy) -> None:
         """Register a fix strategy.
@@ -76,6 +78,7 @@ class FixStrategyEngine:
                     issue,
                     project_root=self.project_root,
                     dry_run=self.dry_run,
+                    code_modifier=self.code_modifier,
                 )
                 results.append(result)
             except Exception as e:

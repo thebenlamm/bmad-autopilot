@@ -26,12 +26,14 @@ class FixStrategy(ABC):
         pass
 
     @abstractmethod
-    def apply_fix(self, issue: Issue, project_root: Path) -> FixResult:
+    def apply_fix(self, issue: Issue, project_root: Path, dry_run: bool = False, code_modifier=None) -> FixResult:
         """Apply fix for the given issue.
 
         Args:
             issue: The issue to fix
             project_root: Root directory of the project
+            dry_run: If True, simulate the fix
+            code_modifier: Optional CodeModifier for safe writes/backups
 
         Returns:
             FixResult indicating success/failure
