@@ -1,7 +1,10 @@
 """Tests for review phase functionality."""
 
+from unittest.mock import patch
+
 import pytest
-from bmad_mcp.phases.review import validate_branch_name
+from bmad_mcp.phases.review import review_story, validate_branch_name
+from bmad_mcp.project import ProjectPaths
 
 
 class TestValidateBranchName:
@@ -52,3 +55,24 @@ class TestValidateBranchName:
         assert validate_branch_name("branch name") is False
         assert validate_branch_name(" branch") is False
         assert validate_branch_name("branch ") is False
+
+
+class TestReviewStory:
+    """Test review story failure handling."""
+
+    def test_review_story_fails_closed_on_diff_error(self, tmp_path):
+        """Review should fail closed if git diff generation fails."""
+        project = ProjectPaths(
+            root=tmp_path,
+            sprint_status=tmp_path / "sprint-status.yaml",
+            stories_dir=tmp_path,
+            epics_file=tmp_path / "epics.md",
+        )
+
+        with patch("bmad_mcp.phases.review.get_git_diff", side_effect=RuntimeError("git diff failed")):
+            result = review_story(project, "0-1-homepage")
+
+        assert result["has_critical_issues"] is True
+        assert result["recommendation"] == "in-progress"
+        assert "Review failed" in result["review"]
+        assert result["structured_issues"][0]["severity"] == "CRITICAL"

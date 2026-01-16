@@ -50,17 +50,15 @@ Consider using const instead of let.
         if file_issues:
             assert any(i.get("line") == 42 for i in file_issues)
 
-    def test_fallback_for_unstructured_review(self):
-        """Create fallback issue when no structured format found."""
+    def test_no_fallback_for_unstructured_review(self):
+        """Do not create issues when no structured format is found."""
         review = """
 This code has some problems.
 There's a critical security issue.
 Please fix it.
 """
         issues = parse_review_issues(review)
-        assert len(issues) >= 1
-        # Should create a generic issue
-        assert issues[0]["severity"] in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        assert issues == []
 
     def test_empty_review(self):
         """Handle empty review content."""

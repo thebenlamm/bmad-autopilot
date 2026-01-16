@@ -98,6 +98,17 @@ class TestUpdateStoryStatus:
         with pytest.raises(ValueError, match="Invalid status"):
             update_story_status(temp_sprint_file, "0-1-homepage", "invalid-status")
 
+    def test_invalid_yaml_does_not_overwrite(self, tmp_path):
+        """Invalid YAML should not be overwritten on update."""
+        sprint_file = tmp_path / "sprint-status.yaml"
+        invalid_yaml = "development_status:\n  - ["
+        sprint_file.write_text(invalid_yaml)
+
+        with pytest.raises(yaml.YAMLError):
+            update_story_status(sprint_file, "0-1-homepage", "backlog")
+
+        assert sprint_file.read_text() == invalid_yaml
+
 
 class TestStoryKeyValidation:
     """Test story key format validation."""
