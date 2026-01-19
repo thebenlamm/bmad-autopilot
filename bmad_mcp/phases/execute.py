@@ -90,14 +90,35 @@ def _build_execution_instructions(
     """Build execution instructions with plan as primary context."""
     return f"""## Execution Instructions
 
-1. Read the Design Plan below and follow it strictly
-2. Implement ALL tasks and subtasks in the story file
-3. Do not deviate from the plan without documenting justification in the plan file
-4. Update the story file as you complete tasks:
-   - Change `- [ ]` to `- [x]`
-5. Run tests to verify acceptance criteria
-6. When all tasks are complete, update the story status:
-   - Use bmad_update_status("{story_key}", "review")
+For EACH task in the story, follow the TDD cycle strictly:
+
+### RED Phase (Write Failing Test First)
+1. Write a test that defines the expected behavior
+2. Run tests - confirm they FAIL
+3. If tests pass without implementation, your test is wrong
+
+### GREEN Phase (Minimal Implementation)
+1. Write the MINIMUM code to make the test pass
+2. Run tests - confirm they now PASS
+3. Do not add extra functionality
+
+### REFACTOR Phase (Improve While Green)
+1. Improve code structure while keeping tests passing
+2. Apply coding standards from the design plan
+3. Run tests after each change
+
+### Task Completion
+1. Update the story file: change `- [ ]` to `- [x]`
+2. Add new files to the File List section
+3. Note decisions in Dev Agent Record
+
+### When All Tasks Done
+Call `mcp__bmad__bmad_verify_implementation({{story_key: "{story_key}", run_tests: true}})` to check:
+- Git has changes
+- All tasks checked off
+- Tests pass
+
+Then call `mcp__bmad__bmad_review_story({{story_key: "{story_key}"}})` for code review.
 
 ## Design Plan (Primary Context)
 
@@ -114,8 +135,9 @@ def _build_execution_instructions(
 - Project root: {project.root}
 - Sprint status: {project.sprint_status}
 
-## Tips
+## Key Rules
 
-- Follow existing code patterns in the project
-- Write tests for new functionality
+- Never skip TDD - write tests first, always
+- Never mark incomplete tasks complete
+- Follow the design plan strictly
 """
