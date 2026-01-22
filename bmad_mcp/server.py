@@ -877,6 +877,25 @@ async def handle_review_story(story_key: str) -> dict:
 
     project = ctx.require_project()
 
+    # Quick verification check: are tasks complete?
+    # This is a soft gate - warns but doesn't block
+    verification_warning = None
+    story_file = project.stories_dir / f"{story_key}.md"
+    if story_file.exists():
+        content = story_file.read_text()
+        # Extract only the Tasks section
+        tasks_match = re.search(r'## Tasks\s*\n(.+?)(?=\n## |\Z)', content, re.DOTALL)
+        if tasks_match:
+            tasks_section = tasks_match.group(1)
+            total_tasks = len(re.findall(r'- \[[ xX]\]', tasks_section))
+            completed_tasks = len(re.findall(r'- \[[xX]\]', tasks_section))
+            if total_tasks > 0 and completed_tasks < total_tasks:
+                verification_warning = {
+                    "type": "INCOMPLETE_TASKS",
+                    "message": f"Only {completed_tasks}/{total_tasks} tasks completed. Consider running bmad_verify_implementation first.",
+                    "recommendation": "Complete all tasks before review for best results.",
+                }
+
     # Run review
     result = review_story(project, story_key)
     review_content = result["review"]
@@ -891,20 +910,28 @@ async def handle_review_story(story_key: str) -> dict:
     new_status = result["recommendation"]
     update_story_status(project.sprint_status, story_key, new_status)
 
+    # Build response data
+    response_data = {
+        "story_key": story_key,
+        "review": review_content,
+        "has_critical_issues": result["has_critical_issues"],
+        "structured_issues": structured_issues,
+        "review_file": str(review_file),
+        "new_status": new_status,
+    }
+
+    # Add verification warning if present
+    if verification_warning:
+        response_data["verification_warning"] = verification_warning
+
     if result["has_critical_issues"]:
         return make_response(
             True,
-            data={
-                "story_key": story_key,
-                "review": review_content,
-                "has_critical_issues": True,
-                "structured_issues": structured_issues,
-                "review_file": str(review_file),
-                "new_status": new_status,
-            },
+            data=response_data,
             next_step={
                 "action": "FIX THESE CRITICAL ISSUES",
                 "issues": structured_issues,
+                "verification_warning": verification_warning,
                 "instructions": [
                     "1. Fix each issue listed above",
                     "2. Pay special attention to CRITICAL and HIGH severity issues",
@@ -921,14 +948,7 @@ async def handle_review_story(story_key: str) -> dict:
     else:
         return make_response(
             True,
-            data={
-                "story_key": story_key,
-                "review": review_content,
-                "has_critical_issues": False,
-                "structured_issues": structured_issues,
-                "review_file": str(review_file),
-                "new_status": new_status,
-            },
+            data=response_data,
             next_step={
                 "action": "Story complete! Move to next story",
                 "tool": "bmad_next",

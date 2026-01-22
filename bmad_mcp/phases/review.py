@@ -122,130 +122,6 @@ def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
         raise
 
 
-"""Code review phase - adversarial review using LLM."""
-
-import re
-import subprocess
-from pathlib import Path
-
-from ..llm import call_llm, get_model, DEFAULT_REVIEW_MODEL
-from ..project import ProjectPaths, get_default_branch
-
-
-def validate_branch_name(branch: str) -> bool:
-    """Validate branch name contains only safe characters.
-
-    Prevents command injection via malicious branch names that could
-    be interpreted as git flags (e.g., --version, -v).
-    """
-    if not branch:
-        return False
-    # Only allow alphanumeric, dots, underscores, hyphens, and forward slashes
-    # Must not start with a hyphen (could be interpreted as a flag)
-    return bool(re.match(r'^[a-zA-Z0-9._/][a-zA-Z0-9._/-]*$', branch))
-
-
-SYSTEM_PROMPT = """You are an ADVERSARIAL Senior Developer performing code review.
-
-You are reviewing ONLY the git diff below. Focus on the actual code changes.
-
-Your job is to find 3-10 specific issues in the code that was written.
-You MUST find issues - 'looks good' is NOT acceptable.
-
-Review for:
-1. Code quality and patterns
-2. Test coverage gaps
-3. Security issues (injection, XSS, auth bypasses)
-4. Performance concerns
-5. Error handling and edge cases
-
-For each issue found:
-- Describe the problem specifically
-- Reference the file and line number from the diff
-- Suggest the fix
-- Rate severity: CRITICAL, HIGH, MEDIUM, LOW
-
-IMPORTANT: Only reference files and lines that appear in the diff.
-Do NOT invent issues about code that isn't shown.
-
-Output a structured review report in markdown format."""
-
-
-def get_git_diff(project_root: Path, base_branch: str | None = None) -> str:
-    """Get git diff from base branch, focusing on code files.
-
-    Args:
-        project_root: Project root directory
-        base_branch: Base branch to compare against (auto-detected if None)
-
-    Returns:
-        Git diff output (code files only, excludes .md, .yaml, .bak)
-    """
-    if base_branch is None:
-        base_branch = get_default_branch(project_root)
-
-    # Validate branch name to prevent command injection
-    if not validate_branch_name(base_branch):
-        raise ValueError(f"Invalid branch name: {base_branch}")
-
-    # Use origin/ prefix to compare against remote (handles case where we're on the base branch)
-    remote_branch = f"origin/{base_branch}"
-
-    # Exclusions for non-code files (focus review on actual implementation)
-    exclusions = [
-        ":!*.md",
-        ":!*.yaml",
-        ":!*.yml",
-        ":!*.bak",
-        ":!*.bak.*",
-        ":!docs/*",
-    ]
-
-    try:
-        # Get diff stats (code files only)
-        stats = subprocess.run(
-            ["git", "diff", remote_branch, "--stat", "--"] + exclusions,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-        )
-
-        # Get full diff (code files only)
-        diff = subprocess.run(
-            ["git", "diff", remote_branch, "--"] + exclusions,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-        )
-
-        # If remote branch doesn't exist, fall back to local branch
-        if stats.returncode != 0 or "unknown revision" in stats.stderr.lower():
-            stats = subprocess.run(
-                ["git", "diff", base_branch, "--stat", "--"] + exclusions,
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-            )
-            diff = subprocess.run(
-                ["git", "diff", base_branch, "--"] + exclusions,
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-            )
-
-        if stats.returncode != 0 or diff.returncode != 0:
-            raise RuntimeError("git diff failed")
-
-        result = f"{stats.stdout}\n\n{diff.stdout}".strip()
-        if not result or result == "\n\n":
-            return "No code changes found (only documentation/config changes)"
-
-        return result
-
-    except Exception:
-        raise
-
-
 def _strip_code_blocks(text: str) -> str:
     """Strip fenced code blocks to prevent regex false positives."""
     return re.sub(r'```[\s\S]*?```', '', text)
@@ -267,19 +143,21 @@ def parse_review_issues(review_content: str) -> list[dict]:
     content_to_parse = _strip_code_blocks(review_content)
 
     # Multiple patterns to match different LLM output formats
+    # Note: Patterns use greedy matching with specific terminators to avoid
+    # cutting off content too early on generic bold text like **File:**
     patterns = [
-        # **CRITICAL**: description or **CRITICAL** description
-        r'\*\*(CRITICAL|HIGH|MEDIUM|LOW)\*\*[:\s]*(.+?)(?=\*\*(?:CRITICAL|HIGH|MEDIUM|LOW)\*\*|\n##|\n\*\*[A-Z]+\*\*|$)',
+        # **CRITICAL**: description - only terminate on another severity header or section
+        r'\*\*(CRITICAL|HIGH|MEDIUM|LOW)\*\*[:\s]*(.+?)(?=\*\*(?:CRITICAL|HIGH|MEDIUM|LOW)\*\*|\n## |\Z)',
         # CRITICAL: description (plain text)
-        r'(?:^|\n)(CRITICAL|HIGH|MEDIUM|LOW)[:\s]+(.+?)(?=\n(?:CRITICAL|HIGH|MEDIUM|LOW)[:\s]|\n##|$)',
+        r'(?:^|\n)(CRITICAL|HIGH|MEDIUM|LOW)[:\s]+(.+?)(?=\n(?:CRITICAL|HIGH|MEDIUM|LOW)[:\s]|\n## |\Z)',
         # ### CRITICAL or ## CRITICAL (header style)
-        r'#{2,3}\s*(CRITICAL|HIGH|MEDIUM|LOW)[:\s]*\n(.+?)(?=\n#{2,3}|$)',
+        r'#{2,3}\s*(CRITICAL|HIGH|MEDIUM|LOW)[:\s]*\n(.+?)(?=\n#{2,3} |\Z)',
         # [CRITICAL] description (bracket style)
-        r'\[(CRITICAL|HIGH|MEDIUM|LOW)\][:\s]*(.+?)(?=\[(?:CRITICAL|HIGH|MEDIUM|LOW)\]|\n##|$)',
+        r'\[(CRITICAL|HIGH|MEDIUM|LOW)\][:\s]*(.+?)(?=\[(?:CRITICAL|HIGH|MEDIUM|LOW)\]|\n## |\Z)',
         # - CRITICAL - or * CRITICAL: (list style)
-        r'[-*]\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*[-:]\s*(.+?)(?=\n[-*]\s*(?:CRITICAL|HIGH|MEDIUM|LOW)|$)',
+        r'[-*]\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*[-:]\s*(.+?)(?=\n[-*]\s*(?:CRITICAL|HIGH|MEDIUM|LOW)|\Z)',
         # Numbered: 1. **CRITICAL**: or 1. CRITICAL:
-        r'\d+\.\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW)\*{0,2}[:\s]+(.+?)(?=\n\d+\.\s*\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)|$)',
+        r'\d+\.\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW)\*{0,2}[:\s]+(.+?)(?=\n\d+\.\s*\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)|\Z)',
     ]
 
     seen_issues = set()  # Deduplicate
@@ -312,9 +190,19 @@ def parse_review_issues(review_content: str) -> list[dict]:
                 continue
             seen_issues.add(dedup_key)
 
-            # Get first line as problem summary
+            # Get problem summary: use first line if substantial, otherwise take more content
             lines = [l.strip() for l in content.split('\n') if l.strip()]
-            problem = lines[0] if lines else content[:100]
+            if lines:
+                problem = lines[0]
+                # If first line is too short (< 20 chars), append more lines for context
+                if len(problem) < 20 and len(lines) > 1:
+                    problem = ' '.join(lines[:3])[:150]
+            else:
+                problem = content[:100]
+
+            # Ensure problem is never just a single word or fragment
+            if len(problem) < 10:
+                problem = content[:150].replace('\n', ' ').strip()
 
             # Look for suggested fix with specific patterns first, then fallback to keywords
             # Priority 1: Explicit "Suggested Fix:" or "Fix:" labels
