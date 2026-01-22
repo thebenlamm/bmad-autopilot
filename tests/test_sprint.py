@@ -119,12 +119,24 @@ class TestStoryKeyValidation:
         assert _is_story_key("1-2-auth-login") is True
         assert _is_story_key("10-20-long-slug-name") is True
 
+    def test_valid_decimal_epic_story_keys(self):
+        """Valid decimal epic story key formats (e.g., epic 2.5)."""
+        assert _is_story_key("2.5.0-minigame-foundation") is True
+        assert _is_story_key("2.5.6-epic-2.5-playtest-polish") is True
+        assert _is_story_key("1.5.1-some-feature") is True
+
     def test_invalid_story_keys(self):
         """Invalid story key formats."""
         assert _is_story_key("homepage") is False
         assert _is_story_key("0-homepage") is False
         assert _is_story_key("a-1-homepage") is False
         assert _is_story_key("0-a-homepage") is False
+
+    def test_invalid_epic_markers(self):
+        """Epic markers should not be treated as stories."""
+        assert _is_story_key("epic-1") is False
+        assert _is_story_key("epic-2.5") is False
+        assert _is_story_key("epic-3-retrospective") is False
 
 
 class TestGetStoriesByStatus:

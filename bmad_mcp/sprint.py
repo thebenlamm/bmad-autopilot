@@ -144,6 +144,23 @@ def get_status_summary(path: Path) -> dict[str, int]:
 
 
 def _is_story_key(key: str) -> bool:
-    """Check if key looks like a story key (N-N-...)."""
+    """Check if key looks like a story key (N-N-... or N.N.N-...).
+
+    Handles both standard format (3-5-damage-calculation) and
+    decimal epic format (2.5.6-epic-2.5-playtest-polish).
+    """
     parts = key.split("-")
-    return len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit()
+    if len(parts) < 3:
+        return False
+
+    first = parts[0]
+    # First part must be numeric (allowing dots for decimal epics like 2.5.6)
+    if not first.replace(".", "").isdigit():
+        return False
+
+    # Decimal epic format (N.N.N-slug): first part has dots
+    if "." in first:
+        return True
+
+    # Standard format (N-N-slug): second part must also be numeric
+    return parts[1].isdigit()
