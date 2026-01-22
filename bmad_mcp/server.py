@@ -946,14 +946,18 @@ async def handle_review_story(story_key: str) -> dict:
             },
         )
     else:
+        next_step_data = {
+            "action": "Story complete! Move to next story",
+            "tool": "bmad_next",
+            "note": "The story is marked as done. Check for more work.",
+        }
+        # Include warning in next_step so it's visible even if UI only shows next_step
+        if verification_warning:
+            next_step_data["verification_warning"] = verification_warning
         return make_response(
             True,
             data=response_data,
-            next_step={
-                "action": "Story complete! Move to next story",
-                "tool": "bmad_next",
-                "note": "The story is marked as done. Check for more work.",
-            },
+            next_step=next_step_data,
         )
 
 
