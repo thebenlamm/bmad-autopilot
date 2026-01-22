@@ -611,18 +611,17 @@ async def handle_develop_story(story_key: str) -> dict:
             next_step={
                 "action": "IMPLEMENT THE CODE NOW",
                 "instructions": [
-                    "1. Read the design_plan and tasks above",
-                    "2. Implement EACH task using the design plan",
-                    "3. Check off tasks in the story file as you complete them (change [ ] to [x])",
-                    "4. Run tests manually to verify your implementation",
-                    "5. When done, call bmad_verify_implementation to check your work",
-                    "   (add run_tests=true if you trust the project's test suite)",
+                    "1. Read the files listed in 'files' above (design_plan is your blueprint)",
+                    "2. Implement EACH task from 'tasks' using TDD (test first, then code)",
+                    "3. Check off tasks in the story file as you complete them ([ ] to [x])",
+                    "4. Run tests to verify your implementation",
+                    "5. Call bmad_verify_implementation when all tasks done",
                 ],
                 "then": {
                     "tool": "bmad_verify_implementation",
                     "args": {"story_key": story_key},
                 },
-                "warning": "Do NOT just read this and move on - you must WRITE CODE!",
+                "warning": "Do NOT just read this - READ THE FILES and WRITE CODE!",
             },
         )
     except (FileNotFoundError, RuntimeError, ValueError) as e:
@@ -655,18 +654,17 @@ async def handle_execute_implementation(story_key: str) -> dict:
             next_step={
                 "action": "IMPLEMENT THE CODE NOW",
                 "instructions": [
-                    "1. Read the design_plan and tasks above",
-                    "2. Implement EACH task using the design plan",
-                    "3. Check off tasks in the story file as you complete them (change [ ] to [x])",
-                    "4. Run tests manually to verify your implementation",
-                    "5. When done, call bmad_verify_implementation to check your work",
-                    "   (add run_tests=true if you trust the project's test suite)",
+                    "1. Read the files listed in 'files' above (design_plan is your blueprint)",
+                    "2. Implement EACH task from 'tasks' using TDD (test first, then code)",
+                    "3. Check off tasks in the story file as you complete them ([ ] to [x])",
+                    "4. Run tests to verify your implementation",
+                    "5. Call bmad_verify_implementation when all tasks done",
                 ],
                 "then": {
                     "tool": "bmad_verify_implementation",
                     "args": {"story_key": story_key},
                 },
-                "warning": "Do NOT just read this and move on - you must WRITE CODE!",
+                "warning": "Do NOT just read this - READ THE FILES and WRITE CODE!",
             },
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

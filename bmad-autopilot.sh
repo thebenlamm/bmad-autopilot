@@ -324,8 +324,8 @@ from bmad_mcp.phases.plan import plan_implementation
 ctx = ProjectContext()
 project = ctx.set_project("$PROJECT_ROOT")
 data = plan_implementation(project, "$story_key")
-print(f"✓ Design plan: {data['design_plan_file']}")
-print(f"✓ Validation report: {data['validation_report_file']}")
+print(f"✓ Design plan: {data['files']['design_plan']}")
+print(f"✓ Validation report: {data['files']['validation_report']}")
 print(f"✓ Validation passed: {data['validation_passed']}")
 sys.exit(0 if data["validation_passed"] else 1)
 PY

@@ -1,13 +1,19 @@
-"""Execution phase - provide implementation instructions from a validated plan."""
+"""Execution phase - provide implementation instructions from a validated plan.
 
-from ..context import ContextRetriever
+Returns lean responses with file paths only. Claude Code reads files directly.
+"""
+
 from ..planning import get_story_artifact_dir
 from ..planning.validator import validation_passed
 from ..project import ProjectPaths
 
 
 def get_execution_instructions(project: ProjectPaths, story_key: str) -> dict:
-    """Get execution instructions for a story based on its design plan."""
+    """Get execution instructions for a story based on its design plan.
+
+    Returns file paths and task metadata only - no embedded file content.
+    Claude Code should read the referenced files directly.
+    """
     story_file = project.stories_dir / f"{story_key}.md"
     if not story_file.exists():
         raise FileNotFoundError(f"Story file not found: {story_file}")
@@ -21,39 +27,25 @@ def get_execution_instructions(project: ProjectPaths, story_key: str) -> dict:
     if not report_file.exists():
         raise FileNotFoundError(f"Validation report not found: {report_file}")
 
-    design_plan = plan_file.read_text()
+    # Validate plan passed - read just enough to check
     validation_report = report_file.read_text()
     if not validation_passed(validation_report):
         raise ValueError("Design plan validation failed; fix plan before execution.")
 
+    # Extract tasks from story (small, actionable data)
     story_content = story_file.read_text()
     tasks = _extract_tasks(story_content)
 
-    retriever = ContextRetriever(project.root)
-    context_section = ""
-    try:
-        context_section = retriever.retrieve_formatted(story_content)
-    except Exception as exc:
-        context_section = f"<!-- Context retrieval failed: {exc} -->"
-
-    instructions = _build_execution_instructions(
-        story_key=story_key,
-        project=project,
-        design_plan=design_plan,
-        validation_report=validation_report,
-        context=context_section,
-    )
+    instructions = _build_lean_instructions(story_key)
 
     return {
         "story_key": story_key,
-        "story_file": str(story_file),
-        "story_content": story_content,
+        "files": {
+            "story": str(story_file),
+            "design_plan": str(plan_file),
+            "validation_report": str(report_file),
+        },
         "tasks": tasks,
-        "context": context_section,
-        "design_plan": design_plan,
-        "design_plan_file": str(plan_file),
-        "validation_report": validation_report,
-        "validation_report_file": str(report_file),
         "instructions": instructions,
     }
 
@@ -80,64 +72,40 @@ def _extract_tasks(content: str) -> list[dict]:
     return tasks
 
 
-def _build_execution_instructions(
-    story_key: str,
-    project: ProjectPaths,
-    design_plan: str,
-    validation_report: str,
-    context: str = "",
-) -> str:
-    """Build execution instructions with plan as primary context."""
-    return f"""## Execution Instructions
+def _build_lean_instructions(story_key: str) -> str:
+    """Build lean execution instructions - workflow guidance only, no embedded content."""
+    return f"""## How to Implement This Story
 
-For EACH task in the story, follow the TDD cycle strictly:
+**First**: Read the files listed in `files` above:
+1. `files.design_plan` - Your implementation blueprint (what to build and how)
+2. `files.story` - Requirements and acceptance criteria
+3. `files.validation_report` - Confirms the plan is valid
 
-### RED Phase (Write Failing Test First)
-1. Write a test that defines the expected behavior
+**Then**: For EACH task, follow TDD strictly:
+
+### RED Phase
+1. Write a failing test for the expected behavior
 2. Run tests - confirm they FAIL
-3. If tests pass without implementation, your test is wrong
+3. If tests pass, your test is wrong
 
-### GREEN Phase (Minimal Implementation)
-1. Write the MINIMUM code to make the test pass
-2. Run tests - confirm they now PASS
-3. Do not add extra functionality
+### GREEN Phase
+1. Write MINIMUM code to pass the test
+2. Run tests - confirm they PASS
 
-### REFACTOR Phase (Improve While Green)
-1. Improve code structure while keeping tests passing
-2. Apply coding standards from the design plan
-3. Run tests after each change
+### REFACTOR Phase
+1. Improve code while keeping tests green
+2. Apply patterns from the design plan
 
 ### Task Completion
-1. Update the story file: change `- [ ]` to `- [x]`
-2. Add new files to the File List section
-3. Note decisions in Dev Agent Record
+- Update story file: `- [ ]` → `- [x]`
+- Add new files to File List section
 
-### When All Tasks Done
-Call `mcp__bmad__bmad_verify_implementation({{story_key: "{story_key}", run_tests: true}})` to check:
-- Git has changes
-- All tasks checked off
-- Tests pass
-
-Then call `mcp__bmad__bmad_review_story({{story_key: "{story_key}"}})` for code review.
-
-## Design Plan (Primary Context)
-
-{design_plan}
-
-## Validation Report
-
-{validation_report}
-
-{context}
-
-## Project Context
-
-- Project root: {project.root}
-- Sprint status: {project.sprint_status}
+### When Done
+1. `mcp__bmad__bmad_verify_implementation({{story_key: "{story_key}", run_tests: true}})`
+2. If verification passes: `mcp__bmad__bmad_review_story({{story_key: "{story_key}"}})`
 
 ## Key Rules
-
-- Never skip TDD - write tests first, always
+- Never skip TDD
 - Never mark incomplete tasks complete
 - Follow the design plan strictly
 """

@@ -54,8 +54,8 @@ def test_plan_implementation_creates_artifacts(tmp_path, monkeypatch):
 
     data = plan_implementation(ctx.project, story_key)
     assert data["validation_passed"] is True
-    assert Path(data["design_plan_file"]).exists()
-    assert Path(data["validation_report_file"]).exists()
+    assert Path(data["files"]["design_plan"]).exists()
+    assert Path(data["files"]["validation_report"]).exists()
 
 
 def test_execute_instructions_require_validated_plan(tmp_path):
@@ -69,9 +69,13 @@ def test_execute_instructions_require_validated_plan(tmp_path):
     )
 
     data = get_execution_instructions(ctx.project, story_key)
-    assert "Design Plan" in data["instructions"]
-    assert data["design_plan"]
-    assert data["validation_report"]
+    # Lean response: file paths only, no embedded content
+    assert "files" in data
+    assert Path(data["files"]["design_plan"]).exists()
+    assert Path(data["files"]["validation_report"]).exists()
+    assert Path(data["files"]["story"]).exists()
+    assert "tasks" in data
+    assert "instructions" in data
 
 
 def test_validation_passed_parses_status():
