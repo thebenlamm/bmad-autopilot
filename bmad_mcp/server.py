@@ -711,12 +711,19 @@ async def handle_verify_implementation(story_key: str, run_tests: bool = False) 
             "message": f"Could not check git: {e}",
         })
 
-    # Check 2: Story file has checked tasks
+    # Check 2: Story file has checked tasks (only count ## Tasks section, not DoD/manual testing)
     story_file = project.stories_dir / f"{story_key}.md"
     if story_file.exists():
         content = story_file.read_text()
-        total_tasks = len(re.findall(r'- \[[ xX]\]', content))
-        completed_tasks = len(re.findall(r'- \[[xX]\]', content))
+
+        # Extract only the Tasks section to avoid counting DoD, manual testing, etc.
+        tasks_section = ""
+        tasks_match = re.search(r'## Tasks\s*\n(.+?)(?=\n## |\Z)', content, re.DOTALL)
+        if tasks_match:
+            tasks_section = tasks_match.group(1)
+
+        total_tasks = len(re.findall(r'- \[[ xX]\]', tasks_section))
+        completed_tasks = len(re.findall(r'- \[[xX]\]', tasks_section))
 
         if total_tasks == 0:
             issues.append({
@@ -770,7 +777,7 @@ async def handle_verify_implementation(story_key: str, run_tests: bool = False) 
                     stderr=err_f,
                     text=True
                 )
-                
+
                 try:
                     proc.wait(timeout=60)
                 except subprocess.TimeoutExpired:
@@ -781,7 +788,34 @@ async def handle_verify_implementation(story_key: str, run_tests: bool = False) 
                     if proc.returncode == 0:
                         test_result = {"check": "tests", "passed": True, "message": "Tests passed"}
                     else:
-                        test_result = {"check": "tests", "passed": False, "message": "Tests failed - fix before review"}
+                        # Read TAIL of output for diagnostics (errors are at the end)
+                        def read_tail(f, max_bytes=1000):
+                            """Read last max_bytes from file."""
+                            f.seek(0, 2)  # Seek to end
+                            size = f.tell()
+                            start = max(0, size - max_bytes)
+                            f.seek(start)
+                            return f.read()
+
+                        stderr_tail = read_tail(err_f)
+                        stdout_tail = read_tail(out_f)
+
+                        # Build diagnostic message from last meaningful line
+                        diagnostic = f"exit code {proc.returncode}"
+                        if stderr_tail:
+                            err_lines = [l.strip() for l in stderr_tail.split('\n') if l.strip()]
+                            if err_lines:
+                                diagnostic += f": {err_lines[-1][:100]}"
+                        elif stdout_tail:
+                            out_lines = [l.strip() for l in stdout_tail.split('\n') if l.strip()]
+                            if out_lines:
+                                diagnostic += f": {out_lines[-1][:100]}"
+
+                        test_result = {
+                            "check": "tests",
+                            "passed": False,
+                            "message": f"Tests failed ({diagnostic}) - fix before review"
+                        }
 
         except FileNotFoundError:
             test_result = {"check": "tests", "passed": None, "message": f"Test runner '{runner_cmd[0]}' not found"}

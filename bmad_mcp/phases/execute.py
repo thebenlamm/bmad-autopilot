@@ -51,13 +51,20 @@ def get_execution_instructions(project: ProjectPaths, story_key: str) -> dict:
 
 
 def _extract_tasks(content: str) -> list[dict]:
-    """Extract tasks from story markdown."""
+    """Extract tasks from story markdown (only from ## Tasks section)."""
     import re
 
     tasks = []
+
+    # Only extract from the ## Tasks section to avoid DoD, manual testing checkboxes
+    tasks_match = re.search(r'## Tasks\s*\n(.+?)(?=\n## |\Z)', content, re.DOTALL)
+    if not tasks_match:
+        return tasks
+
+    tasks_section = tasks_match.group(1)
     pattern = r'^(\s*)-\s*\[([ xX])\]\s*(.+)$'
 
-    for match in re.finditer(pattern, content, re.MULTILINE):
+    for match in re.finditer(pattern, tasks_section, re.MULTILINE):
         indent = len(match.group(1))
         completed = match.group(2).lower() == 'x'
         description = match.group(3).strip()

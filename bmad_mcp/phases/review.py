@@ -316,10 +316,34 @@ def parse_review_issues(review_content: str) -> list[dict]:
             lines = [l.strip() for l in content.split('\n') if l.strip()]
             problem = lines[0] if lines else content[:100]
 
-            # Look for suggested fix with various keywords
-            fix_keywords = r'(?:fix|solution|suggest|change|should|instead|replace|use)[:\s]*(.+?)(?:\n|$)'
-            fix_match = re.search(fix_keywords, content, re.IGNORECASE)
-            fix = fix_match.group(1).strip() if fix_match else None
+            # Look for suggested fix with specific patterns first, then fallback to keywords
+            # Priority 1: Explicit "Suggested Fix:" or "Fix:" labels
+            fix = None
+            explicit_fix = re.search(
+                r'(?:Suggested\s+)?Fix:\s*(.+?)(?=\n\s*[-*]|\n\n|\Z)',
+                content,
+                re.IGNORECASE | re.DOTALL
+            )
+            if explicit_fix:
+                fix = explicit_fix.group(1).strip()
+            else:
+                # Priority 2: Keywords with word boundaries (avoid matching inside words)
+                keyword_fix = re.search(
+                    r'\b(?:fix|solution|suggest|change|should|instead|replace)\b[:\s]+(.+?)(?=\n|$)',
+                    content,
+                    re.IGNORECASE
+                )
+                if keyword_fix:
+                    fix = keyword_fix.group(1).strip()
+
+            # Clean up the fix text (remove markdown artifacts)
+            if fix:
+                fix = re.sub(r'^\*+\s*', '', fix)  # Remove leading asterisks
+                fix = re.sub(r'\s*\*+$', '', fix)  # Remove trailing asterisks
+                if len(fix) > 500:
+                    fix = fix[:500] + "..."
+                if len(fix) < 3:  # Too short to be meaningful
+                    fix = None
 
             issues.append({
                 "severity": severity,
